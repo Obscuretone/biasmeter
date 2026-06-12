@@ -1088,22 +1088,23 @@ def send_to_llm_for_comparison(topic, articles_content):
                             "    }\n"
                             "  ],\n"
                             '  "provider_specific_inclusions": [\n'
-                            '    {"provider": "provider name", "detail": "detail this provider included", "absent_from": ["provider name"], "why_it_matters": "why this may affect reader understanding"}\n'
+                            '    {"provider": "provider name", "information_type": "short label for kind of information included", "detail": "detail this provider included", "absent_from": ["provider name"], "why_it_matters": "why this may affect reader understanding"}\n'
                             "  ],\n"
                             '  "provider_specific_omissions": [\n'
-                            '    {"provider": "provider name", "missing_detail": "detail omitted or not present", "covered_by": ["provider name"], "why_it_matters": "why this may affect reader understanding"}\n'
+                            '    {"provider": "provider name", "information_type": "short label for kind of information omitted", "missing_detail": "detail omitted or not present", "covered_by": ["provider name"], "why_it_matters": "why this may affect reader understanding"}\n'
                             "  ],\n"
                             '  "framing_differences": [\n'
-                            '    {"providers": ["provider name"], "difference": "difference in emphasis, wording, attribution, ordering, quoted voices, or tone"}\n'
+                            '    {"providers": ["provider name"], "framing_axis": "short label for kind of framing difference", "difference": "difference in emphasis, wording, attribution, ordering, quoted voices, or tone"}\n'
                             "  ],\n"
                             '  "potential_bias_signals": [\n'
-                            '    {"signal": "cautious evidence-backed observation", "providers": ["provider name"], "evidence": "what in the supplied text supports this", "confidence": "high|medium|low"}\n'
+                            '    {"signal": "cautious evidence-backed observation", "bias_axis": "short label for suspected recurring bias type", "providers": ["provider name"], "evidence": "what in the supplied text supports this", "confidence": "high|medium|low"}\n'
                             "  ],\n"
                             '  "confidence": "high|medium|low"\n'
                             "}\n\n"
                             "Make cliffs_notes the main reader-facing summary: 4 to 7 concise factual bullets about what happened. "
                             "Do not mention providers, coverage differences, omissions, inclusions, framing, or bias in cliffs_notes. "
                             "Save all source-comparison analysis for the provider-specific and bias sections. "
+                            "Use stable information_type, framing_axis, and bias_axis labels so long-term patterns can be compared across topics. "
                             "Make full_text comprehensive: include all material facts that appear in any source, especially details other providers left out. "
                             "Do not include any full_text sentence without at least one source object. "
                             "Do not claim motive or intent. If a bias signal is weak, label confidence low.\n\n"

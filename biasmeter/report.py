@@ -1,4 +1,5 @@
 import html
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -7,6 +8,108 @@ PATTERN_CATEGORIES = {
     "omissions": "Omissions",
     "framing_differences": "Framing differences",
     "bias_signals": "Bias signals",
+}
+
+INFORMATION_TYPE_KEYWORDS = {
+    "public safety and enforcement": (
+        "police",
+        "arrest",
+        "crime",
+        "safety",
+        "enforcement",
+        "investigation",
+        "collision",
+        "crash",
+        "fire",
+        "emergency",
+        "spvm",
+        "sq",
+    ),
+    "government accountability": (
+        "government",
+        "minister",
+        "audit",
+        "auditor",
+        "report",
+        "public money",
+        "policy",
+        "bill",
+        "law",
+        "legislation",
+        "accountability",
+    ),
+    "costs, taxes, and affordability": (
+        "cost",
+        "price",
+        "tax",
+        "qst",
+        "rent",
+        "fare",
+        "fee",
+        "funding",
+        "money",
+        "budget",
+        "affordability",
+    ),
+    "health and consumer risk": (
+        "health",
+        "recall",
+        "food",
+        "milk",
+        "drug",
+        "hospital",
+        "disease",
+        "risk",
+        "warning",
+        "ban",
+    ),
+    "transit and infrastructure": (
+        "transit",
+        "rem",
+        "stm",
+        "metro",
+        "bus",
+        "road",
+        "bridge",
+        "parking",
+        "station",
+        "traffic",
+        "infrastructure",
+    ),
+    "weather and environment": (
+        "weather",
+        "storm",
+        "flood",
+        "rain",
+        "heat",
+        "cold",
+        "water",
+        "environment",
+        "climate",
+        "forecast",
+    ),
+    "who is quoted or centered": (
+        "quote",
+        "quoted",
+        "interview",
+        "said",
+        "voice",
+        "residents",
+        "officials",
+        "advocates",
+        "experts",
+        "critics",
+    ),
+    "context and background": (
+        "context",
+        "background",
+        "history",
+        "previous",
+        "data",
+        "statistics",
+        "comparison",
+        "timeline",
+    ),
 }
 
 
@@ -75,13 +178,36 @@ def new_provider_pattern():
     return {
         "counts": {category: 0 for category in PATTERN_CATEGORIES},
         "examples": {category: [] for category in PATTERN_CATEGORIES},
+        "themes": {category: {} for category in PATTERN_CATEGORIES},
         "topics": set(),
     }
 
 
-def add_pattern_example(pattern, category, topic, detail, context=""):
+def normalize_theme_label(value):
+    value = re.sub(r"\s+", " ", str(value or "")).strip().lower()
+    return value or "uncategorized detail"
+
+
+def infer_information_type(*parts):
+    text = " ".join(str(part or "") for part in parts).lower()
+    for label, keywords in INFORMATION_TYPE_KEYWORDS.items():
+        if any(keyword in text for keyword in keywords):
+            return label
+
+    return "other recurring detail"
+
+
+def add_theme(pattern, category, theme):
+    theme = normalize_theme_label(theme)
+    category_themes = pattern["themes"][category]
+    category_themes[theme] = category_themes.get(theme, 0) + 1
+
+
+def add_pattern_example(pattern, category, topic, detail, context="", theme=None):
     pattern["counts"][category] += 1
     pattern["topics"].add(topic)
+    theme = theme or infer_information_type(detail, context)
+    add_theme(pattern, category, theme)
 
     if len(pattern["examples"][category]) >= 5:
         return
@@ -91,6 +217,7 @@ def add_pattern_example(pattern, category, topic, detail, context=""):
             "topic": topic,
             "detail": detail,
             "context": context,
+            "theme": theme,
         }
     )
 
@@ -115,6 +242,7 @@ def build_provider_patterns(reports):
                 topic,
                 item.get("detail", ""),
                 "Absent from: " + ", ".join(item.get("absent_from", [])),
+                item.get("information_type"),
             )
 
         for item in report.get("provider_specific_omissions", []):
@@ -125,6 +253,7 @@ def build_provider_patterns(reports):
                 topic,
                 item.get("missing_detail", ""),
                 "Covered by: " + ", ".join(item.get("covered_by", [])),
+                item.get("information_type"),
             )
 
         for item in report.get("framing_differences", []):
@@ -134,6 +263,8 @@ def build_provider_patterns(reports):
                     "framing_differences",
                     topic,
                     item.get("difference", ""),
+                    "",
+                    item.get("framing_axis"),
                 )
 
         for item in report.get("potential_bias_signals", []):
@@ -144,6 +275,7 @@ def build_provider_patterns(reports):
                     topic,
                     item.get("signal", ""),
                     f"{item.get('confidence', 'unknown')} confidence",
+                    item.get("bias_axis"),
                 )
 
     return {
@@ -164,6 +296,20 @@ def strongest_provider_categories(pattern):
         )
         if count
     ]
+
+
+def strongest_provider_themes(pattern, limit=4):
+    themes = []
+    for category, category_themes in pattern["themes"].items():
+        for theme, count in category_themes.items():
+            themes.append((theme, category, count))
+
+    return sorted(themes, key=lambda item: item[2], reverse=True)[:limit]
+
+
+def describe_theme(theme, category, count):
+    category_label = PATTERN_CATEGORIES[category].lower()
+    return f"{theme} ({category_label}, {count})"
 
 
 def summarize_provider_pattern(pattern):
@@ -193,11 +339,21 @@ def summarize_provider_pattern(pattern):
         bias_signal_note = (
             f" {counts['bias_signals']} cautious bias signal(s) were flagged."
         )
+    recurring_themes = [
+        describe_theme(theme, category, count)
+        for theme, category, count in strongest_provider_themes(pattern, limit=3)
+        if count > 1
+    ]
+    recurring_theme_note = ""
+    if recurring_themes:
+        recurring_theme_note = (
+            " Repeated information types include " + ", ".join(recurring_themes) + "."
+        )
 
     return (
         f"Across {observed_topic_count} cached topic(s), this provider has "
         f"{total_signals} discrepancy signal(s), mostly {strongest_phrase}."
-        f"{bias_signal_note} {consistency_note}"
+        f"{bias_signal_note}{recurring_theme_note} {consistency_note}"
     )
 
 
@@ -205,6 +361,15 @@ def finalize_provider_pattern(pattern):
     finalized_pattern = {
         "counts": pattern["counts"],
         "examples": pattern["examples"],
+        "themes": pattern["themes"],
+        "strongest_themes": [
+            {
+                "theme": theme,
+                "category": category,
+                "count": count,
+            }
+            for theme, category, count in strongest_provider_themes(pattern)
+        ],
         "observed_topic_count": len(pattern["topics"]),
         "topics": sorted(pattern["topics"]),
     }
@@ -216,8 +381,28 @@ def format_pattern_example(example):
     topic = html.escape(example.get("topic", "Untitled topic"))
     detail = html.escape(example.get("detail", ""))
     context = html.escape(example.get("context", ""))
+    theme = html.escape(example.get("theme", ""))
     context_html = f'<br><span class="muted">{context}</span>' if context else ""
-    return f"<strong>{topic}</strong>: {detail}{context_html}"
+    theme_html = f'<br><span class="muted">Type: {theme}</span>' if theme else ""
+    return f"<strong>{topic}</strong>: {detail}{context_html}{theme_html}"
+
+
+def render_provider_themes(pattern):
+    themes = pattern.get("strongest_themes", [])
+    if not themes:
+        return '<p class="muted">No recurring information types detected yet.</p>'
+
+    items = []
+    for theme in themes:
+        items.append(
+            "<li>"
+            f"<strong>{html.escape(theme.get('theme', 'unknown'))}</strong>: "
+            f"{html.escape(PATTERN_CATEGORIES.get(theme.get('category'), 'signals').lower())}, "
+            f"{theme.get('count', 0)} signal(s)"
+            "</li>"
+        )
+
+    return "<ul>" + "".join(items) + "</ul>"
 
 
 def render_provider_patterns(patterns):
@@ -257,6 +442,8 @@ def render_provider_patterns(patterns):
                 <p>{html.escape(pattern.get("summary", ""))}</p>
                 <p class="muted">Observed across {pattern.get("observed_topic_count", 0)} cached topic(s).</p>
                 <div class="pattern-chips">{chips}</div>
+                <h4>Recurring Information Types</h4>
+                {render_provider_themes(pattern)}
                 {"".join(example_sections)}
             </article>
             """
