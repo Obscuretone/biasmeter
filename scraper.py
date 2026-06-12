@@ -1,4 +1,4 @@
-from auto_news.app import main
+from biasmeter.app import main
 
 if __name__ == "__main__":
     main()

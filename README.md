@@ -1,6 +1,6 @@
-# Auto News
+# Biasmeter
 
-Auto News fetches Montreal RSS feeds, groups similar stories with Mistral, extracts article text, and generates a browser report showing comprehensive sourced coverage across providers.
+Biasmeter fetches Montreal RSS feeds, groups similar stories with Mistral, extracts article text, and generates a browser report showing comprehensive sourced coverage across providers.
 
 ## Setup
 
@@ -24,19 +24,19 @@ The app also supports the older `MISTRAL_KEY` name for compatibility.
 Scan for new/changed news and queue background processing:
 
 ```bash
-auto-news --scan
+biasmeter --scan
 ```
 
 Run the worker to process queued scan tasks:
 
 ```bash
-auto-news --worker
+biasmeter --worker
 ```
 
 Read the cached news report in your browser:
 
 ```bash
-auto-news --read
+biasmeter --read
 ```
 
 The default report is written to `reports/latest.html`. `--read` is cache-only: it renders existing cached topic reports and opens the browser without crawling, embedding, or calling Mistral.
@@ -44,13 +44,13 @@ The default report is written to `reports/latest.html`. `--read` is cache-only: 
 Clean stale single-source reports/caches after changing grouping rules:
 
 ```bash
-auto-news --cleanup
+biasmeter --cleanup
 ```
 
 For step-by-step debugging, process one queued task and exit:
 
 ```bash
-auto-news --worker --once
+biasmeter --worker --once
 ```
 
 Or run the script directly:
@@ -64,32 +64,32 @@ python scraper.py
 Mostly just ingest RSS into the document DB:
 
 ```bash
-auto-news --ingest-rss
+biasmeter --ingest-rss
 ```
 
 Create RSS embeddings after ingest, in visible batches:
 
 ```bash
-auto-news --embed-rss
+biasmeter --embed-rss
 ```
 
 Process a small batch if you are tuning rate limits:
 
 ```bash
-auto-news --embed-rss --limit 25
+biasmeter --embed-rss --limit 25
 ```
 
 Ingest RSS and then create embeddings:
 
 ```bash
-auto-news --ingest-rss --embed-rss
+biasmeter --ingest-rss --embed-rss
 ```
 
 Queue RSS ingestion and embedding for a background worker:
 
 ```bash
-auto-news --enqueue
-auto-news --worker
+biasmeter --enqueue
+biasmeter --worker
 ```
 
 The queued workflow runs:
@@ -103,37 +103,37 @@ The queued workflow runs:
 Render the browser report from cached topic reports only:
 
 ```bash
-auto-news --render-cache --open
+biasmeter --render-cache --open
 ```
 
 Legacy alias for reading:
 
 ```bash
-auto-news --open
+biasmeter --open
 ```
 
 Write to a custom path:
 
 ```bash
-auto-news --output reports/montreal.html
+biasmeter --output reports/montreal.html
 ```
 
 Save documents to a custom SQLite database:
 
 ```bash
-auto-news --db data/auto_news.sqlite
+biasmeter --db data/biasmeter.sqlite
 ```
 
 Check an arbitrary article against stored topic embeddings:
 
 ```bash
-auto-news --check-url "https://example.com/article"
+biasmeter --check-url "https://example.com/article"
 ```
 
 If you know the source provider, pass it for better extraction:
 
 ```bash
-auto-news --check-url "https://globalnews.ca/..." --provider global
+biasmeter --check-url "https://globalnews.ca/..." --provider global
 ```
 
 The full report flow embeds RSS title/description text first, groups likely matching stories by embedding similarity, then uses Mistral only for the deeper sourced coverage report. The browser report starts with cumulative Provider Patterns across cached topics, then each topic has Cliffs Notes, provider-specific inclusions and omissions, framing differences, cautious bias signals, and a collapsible full sourced text. Hover over highlighted sentences in the full text to see which provider(s) support that sentence.
@@ -163,7 +163,7 @@ Topic grouping is incremental: newly embedded RSS items are compared against exi
 Inspect the local document database:
 
 ```bash
-sqlite3 data/auto_news.sqlite "select document_type, count(*) from documents group by document_type;"
+sqlite3 data/biasmeter.sqlite "select document_type, count(*) from documents group by document_type;"
 ```
 
 ## Configuration
@@ -175,7 +175,7 @@ sqlite3 data/auto_news.sqlite "select document_type, count(*) from documents gro
 | `MISTRAL_EMBEDDING_MODEL` | `mistral-embed` | Model used for summary/topic embeddings. |
 | `REQUEST_TIMEOUT_SECONDS` | `20` | Timeout for RSS and article requests. |
 | `REPORT_PATH` | `reports/latest.html` | Default HTML report path. |
-| `DOCUMENT_DB_PATH` | `data/auto_news.sqlite` | Default SQLite document database path. |
+| `DOCUMENT_DB_PATH` | `data/biasmeter.sqlite` | Default SQLite document database path. |
 | `TOPIC_MATCH_THRESHOLD` | `0.82` | Minimum cosine similarity for arbitrary article topic matches. |
 | `EMBEDDING_BATCH_SIZE` | `16` | Number of RSS items sent per embedding request. |
 | `MISTRAL_MAX_RETRIES` | `5` | Retry attempts for Mistral 429/transient errors. |
@@ -186,6 +186,6 @@ sqlite3 data/auto_news.sqlite "select document_type, count(*) from documents gro
 ## Notes
 
 - `.env` is intentionally ignored so your key does not get committed.
-- Provider RSS feeds and selectors live in `scraper.py`.
+- Provider RSS feeds and selectors live in `biasmeter/config.py`.
 - The current feed list is based on Feedspot's Montreal news RSS list.
 - CTV and Montreal Gazette are not enabled because their listed RSS feeds did not return valid RSS during verification.

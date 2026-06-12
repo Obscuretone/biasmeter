@@ -296,7 +296,7 @@ def render_html_report(reports, output_path):
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Auto News Coverage Report</title>
+        <title>Biasmeter Coverage Report</title>
         <style>
             :root {{
                 color-scheme: light dark;
@@ -399,7 +399,7 @@ def render_html_report(reports, output_path):
     </head>
     <body>
         <header>
-            <h1>Auto News Coverage Report</h1>
+            <h1>Biasmeter Coverage Report</h1>
             <p class="muted">Generated {html.escape(generated_at)}. Hover over highlighted sentences to see which provider each sentence came from.</p>
         </header>
         <main>

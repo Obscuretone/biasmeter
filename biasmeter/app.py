@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from mistralai import Mistral
 from mistralai.models.sdkerror import SDKError
 
-from auto_news.config import (
+from biasmeter.config import (
     DEFAULT_DB_PATH,
     DEFAULT_REPORT_PATH,
     EMBEDDING_BATCH_SIZE,
@@ -29,8 +29,8 @@ from auto_news.config import (
     headers,
     providers,
 )
-from auto_news.report import render_cached_report, render_html_report
-from auto_news.store import (
+from biasmeter.report import render_cached_report, render_html_report
+from biasmeter.store import (
     DocumentStore,
     get_cached_topic_report,
     stable_json_hash,
@@ -544,7 +544,7 @@ def embed_stored_rss_items(store, limit=None):
     rss_items = get_stored_rss_items(store, limit)
 
     if not rss_items:
-        print("No RSS items found. Run auto-news --ingest-rss first.")
+        print("No RSS items found. Run biasmeter --ingest-rss first.")
         return []
 
     before_count = len(store.list_by_type("rss_embedding"))
@@ -1208,7 +1208,7 @@ def parse_args():
     parser.add_argument(
         "--version",
         action="version",
-        version="auto-news 0.1.0",
+        version="biasmeter 0.1.0",
     )
     return parser.parse_args()
 
@@ -1281,7 +1281,7 @@ def main():
                 webbrowser.open(output_path.resolve().as_uri())
             else:
                 print(
-                    "No cached report yet. Run auto-news --scan, then auto-news --worker."
+                    "No cached report yet. Run biasmeter --scan, then biasmeter --worker."
                 )
         finally:
             store.close()
