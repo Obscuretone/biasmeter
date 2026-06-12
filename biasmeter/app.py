@@ -31,7 +31,11 @@ from biasmeter.config import (
     headers,
     providers,
 )
-from biasmeter.report import render_cached_report, render_html_report
+from biasmeter.report import (
+    build_provider_patterns,
+    render_cached_report,
+    render_html_report,
+)
 from biasmeter.store import (
     DocumentStore,
     get_cached_topic_report,
@@ -1017,6 +1021,21 @@ def build_topic_embedding(store, report, articles_content):
     return document
 
 
+def refresh_provider_bias_summary(store):
+    reports = [row["content"] for row in store.list_by_type("topic_report")]
+    provider_patterns = build_provider_patterns(reports)
+    store.upsert(
+        "provider_bias_summary",
+        "latest",
+        {
+            "generated_at": datetime.now().isoformat(),
+            "topic_count": len(reports),
+            "providers": provider_patterns,
+        },
+    )
+    return provider_patterns
+
+
 def send_to_llm_for_comparison(topic, articles_content):
     """
     Send the articles' content to Mistral to flag discrepancies across providers.
@@ -1105,7 +1124,7 @@ def send_to_llm_for_comparison(topic, articles_content):
         return None
 
 
-def generate_topic_report(store, topic, articles):
+def generate_topic_report(store, topic, articles, output_path=None):
     articles_content = []
 
     for article in articles:
@@ -1170,6 +1189,9 @@ def generate_topic_report(store, topic, articles):
     report = store_topic_report_cache(store, topic, articles_content, report)
     store.upsert("topic_report", topic, report)
     build_topic_embedding(store, report, articles_content)
+    refresh_provider_bias_summary(store)
+    if output_path:
+        render_cached_report(store, output_path)
     print(f"Stored topic report: {report.get('title') or topic}")
     return report
 
@@ -1191,6 +1213,7 @@ def enqueue_topic_report_tasks(store, output_path=DEFAULT_REPORT_PATH):
             {
                 "topic": topic,
                 "articles": articles,
+                "output": output_path,
             },
             max_attempts=3,
         )
@@ -1234,7 +1257,12 @@ def process_task(store, task):
         return
 
     if task_type == "generate_topic_report":
-        generate_topic_report(store, payload["topic"], payload["articles"])
+        generate_topic_report(
+            store,
+            payload["topic"],
+            payload["articles"],
+            payload.get("output"),
+        )
         return
 
     if task_type == "render_cached_report":
@@ -1556,6 +1584,7 @@ def main():
                     reports.append(comparison_result)
                     store.upsert("topic_report", topic, comparison_result)
                     build_topic_embedding(store, comparison_result, articles_content)
+                    refresh_provider_bias_summary(store)
 
         if reports:
             output_path = render_html_report(reports, args.output)

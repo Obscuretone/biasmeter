@@ -136,7 +136,7 @@ If you know the source provider, pass it for better extraction:
 biasmeter --check-url "https://globalnews.ca/..." --provider global
 ```
 
-The full report flow embeds RSS title/description text first, groups likely matching stories by embedding similarity, then uses Mistral only for the deeper sourced coverage report. The browser GUI has two pages: Recent News for Cliffs Notes, source links, and sourced full text; Provider Breakdowns for cumulative Provider Patterns plus per-topic inclusions, omissions, framing differences, and cautious bias signals. Hover over highlighted sentences in the full text to see which provider(s) support that sentence.
+The full report flow embeds RSS title/description text first, groups likely matching stories by embedding similarity, then uses Mistral only for the deeper sourced coverage report. The browser GUI has two pages: Recent News for Cliffs Notes, source links, and sourced full text; Provider Breakdowns for cumulative Provider Patterns plus per-provider summaries of recurring inclusions, omissions, framing differences, and cautious bias signals. Provider summaries are refreshed whenever a new topic report is stored. Hover over highlighted sentences in the full text to see which provider(s) support that sentence.
 
 Each run stores JSON documents in SQLite:
 

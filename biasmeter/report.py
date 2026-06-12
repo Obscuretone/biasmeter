@@ -75,11 +75,13 @@ def new_provider_pattern():
     return {
         "counts": {category: 0 for category in PATTERN_CATEGORIES},
         "examples": {category: [] for category in PATTERN_CATEGORIES},
+        "topics": set(),
     }
 
 
 def add_pattern_example(pattern, category, topic, detail, context=""):
     pattern["counts"][category] += 1
+    pattern["topics"].add(topic)
 
     if len(pattern["examples"][category]) >= 5:
         return
@@ -145,10 +147,69 @@ def build_provider_patterns(reports):
                 )
 
     return {
-        provider: pattern
+        provider: finalize_provider_pattern(pattern)
         for provider, pattern in sorted(patterns.items())
         if any(pattern["counts"].values())
     }
+
+
+def strongest_provider_categories(pattern):
+    counts = pattern["counts"]
+    return [
+        category
+        for category, count in sorted(
+            counts.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if count
+    ]
+
+
+def summarize_provider_pattern(pattern):
+    observed_topic_count = len(pattern["topics"])
+    counts = pattern["counts"]
+    total_signals = sum(counts.values())
+
+    if total_signals == 0:
+        return "No recurring discrepancy signals have been found for this provider yet."
+
+    strongest_categories = strongest_provider_categories(pattern)
+    strongest_labels = [
+        PATTERN_CATEGORIES[category].lower() for category in strongest_categories[:2]
+    ]
+    if len(strongest_labels) == 1:
+        strongest_phrase = strongest_labels[0]
+    else:
+        strongest_phrase = f"{strongest_labels[0]} and {strongest_labels[1]}"
+
+    consistency_note = (
+        "This is an early signal, not yet a consistent pattern."
+        if observed_topic_count < 2
+        else "This appears across multiple cached topics and is worth watching over time."
+    )
+    bias_signal_note = ""
+    if counts["bias_signals"]:
+        bias_signal_note = (
+            f" {counts['bias_signals']} cautious bias signal(s) were flagged."
+        )
+
+    return (
+        f"Across {observed_topic_count} cached topic(s), this provider has "
+        f"{total_signals} discrepancy signal(s), mostly {strongest_phrase}."
+        f"{bias_signal_note} {consistency_note}"
+    )
+
+
+def finalize_provider_pattern(pattern):
+    finalized_pattern = {
+        "counts": pattern["counts"],
+        "examples": pattern["examples"],
+        "observed_topic_count": len(pattern["topics"]),
+        "topics": sorted(pattern["topics"]),
+    }
+    finalized_pattern["summary"] = summarize_provider_pattern(pattern)
+    return finalized_pattern
 
 
 def format_pattern_example(example):
@@ -193,6 +254,8 @@ def render_provider_patterns(patterns):
             f"""
             <article class="provider-pattern">
                 <h3>{html.escape(provider)}</h3>
+                <p>{html.escape(pattern.get("summary", ""))}</p>
+                <p class="muted">Observed across {pattern.get("observed_topic_count", 0)} cached topic(s).</p>
                 <div class="pattern-chips">{chips}</div>
                 {"".join(example_sections)}
             </article>
