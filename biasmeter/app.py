@@ -41,6 +41,27 @@ UTC = timezone.utc
 last_mistral_request_at = 0.0
 
 
+class MistralRetryAfterError(RuntimeError):
+    def __init__(self, operation_name, retry_after_seconds, original_error):
+        self.operation_name = operation_name
+        self.retry_after_seconds = retry_after_seconds
+        self.original_error = original_error
+        super().__init__(
+            f"{operation_name} rate-limited by Mistral; retry after "
+            f"{retry_after_seconds:.3f}s. Original error: {original_error}"
+        )
+
+
+class MistralRateLimitWithoutRetryAfterError(RuntimeError):
+    def __init__(self, operation_name, original_error):
+        self.operation_name = operation_name
+        self.original_error = original_error
+        super().__init__(
+            f"{operation_name} rate-limited by Mistral without Retry-After. "
+            f"Original error: {original_error}"
+        )
+
+
 def get_mistral_client():
     if not MISTRAL_API_KEY:
         raise RuntimeError(
@@ -217,11 +238,10 @@ def call_mistral_with_retries(operation_name, callback):
             throttle_mistral_request()
             return callback()
         except Exception as exc:
-            retryable = is_mistral_rate_limit_error(exc) or is_mistral_transient_error(
-                exc
-            )
+            rate_limited = is_mistral_rate_limit_error(exc)
+            retryable = rate_limited or is_mistral_transient_error(exc)
 
-            if not retryable or retry_count > MISTRAL_MAX_RETRIES:
+            if not retryable:
                 raise
 
             delay_seconds = get_retry_after_seconds(exc)
@@ -230,7 +250,16 @@ def call_mistral_with_retries(operation_name, callback):
                     f"{operation_name} hit a retryable Mistral error "
                     f"({exc}) but did not include Retry-After. Not retrying."
                 )
+                if rate_limited:
+                    raise MistralRateLimitWithoutRetryAfterError(
+                        operation_name, exc
+                    ) from exc
                 raise
+
+            if retry_count > MISTRAL_MAX_RETRIES:
+                raise MistralRetryAfterError(
+                    operation_name, delay_seconds, exc
+                ) from exc
 
             print(
                 f"{operation_name} hit a retryable Mistral error "
@@ -422,6 +451,8 @@ def send_to_llm_for_grouping(articles):
         )
         # Return the LLM's response (the similarity analysis)
         return extract_mistral_text(chat_response)
+    except (MistralRetryAfterError, MistralRateLimitWithoutRetryAfterError):
+        raise
     except Exception as e:
         print(f"Error while sending to Mistral: {e}")
         return None
@@ -470,6 +501,8 @@ def summarize_article_for_matching(article):
             ),
         )
         return extract_mistral_text(chat_response)
+    except (MistralRetryAfterError, MistralRateLimitWithoutRetryAfterError):
+        raise
     except Exception as e:
         print(f"Error summarizing article: {e}")
         return article.get("description") or article.get("title") or ""
@@ -1007,6 +1040,8 @@ def send_to_llm_for_comparison(topic, articles_content):
             ),
         )
         return parse_llm_json(extract_mistral_text(chat_response))
+    except (MistralRetryAfterError, MistralRateLimitWithoutRetryAfterError):
+        raise
     except Exception as e:
         print(f"Error sending for comparison: {e}")
         return None
@@ -1048,6 +1083,8 @@ def generate_topic_report(store, topic, articles):
                 )
                 article_document = store_article_revision(store, article_document)
                 articles_content.append(article_document)
+        except (MistralRetryAfterError, MistralRateLimitWithoutRetryAfterError):
+            raise
         except Exception as e:
             print(f"Error extracting content for article {url}: {e}")
 
@@ -1165,6 +1202,13 @@ def run_worker(store, once=False, sleep_seconds=5):
 
         try:
             process_task(store, task)
+        except MistralRetryAfterError as exc:
+            print(f"Task paused: {exc}")
+            store.fail_task(task, exc, retry_after_seconds=exc.retry_after_seconds)
+        except MistralRateLimitWithoutRetryAfterError as exc:
+            print(f"Task failed without retry: {exc}")
+            task["attempts"] = task["max_attempts"]
+            store.fail_task(task, exc)
         except Exception as exc:
             print(f"Task failed: {exc}")
             store.fail_task(task, exc)
@@ -1411,6 +1455,11 @@ def main():
                                 store, article_document
                             )
                             articles_content.append(article_document)
+                    except (
+                        MistralRetryAfterError,
+                        MistralRateLimitWithoutRetryAfterError,
+                    ):
+                        raise
                     except Exception as e:
                         print(f"Error extracting content for article {url}: {e}")
 

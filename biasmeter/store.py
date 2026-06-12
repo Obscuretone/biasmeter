@@ -234,11 +234,15 @@ class DocumentStore:
         )
         self.connection.commit()
 
-    def fail_task(self, task, error):
+    def fail_task(self, task, error, retry_after_seconds=None):
         next_status = (
             "failed" if task["attempts"] >= task["max_attempts"] else "pending"
         )
-        delay_seconds = min(60 * task["attempts"], 300)
+        if retry_after_seconds is None:
+            delay_seconds = min(60 * task["attempts"], 300)
+        else:
+            delay_seconds = max(float(retry_after_seconds), 0.001)
+
         self.connection.execute(
             """
             UPDATE tasks
