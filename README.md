@@ -178,9 +178,7 @@ sqlite3 data/biasmeter.sqlite "select document_type, count(*) from documents gro
 | `DOCUMENT_DB_PATH` | `data/biasmeter.sqlite` | Default SQLite document database path. |
 | `TOPIC_MATCH_THRESHOLD` | `0.82` | Minimum cosine similarity for arbitrary article topic matches. |
 | `EMBEDDING_BATCH_SIZE` | `16` | Number of RSS items sent per embedding request. |
-| `MISTRAL_MAX_RETRIES` | `5` | Retry attempts for Mistral 429/transient errors. |
-| `MISTRAL_RETRY_BASE_SECONDS` | `5` | Exponential backoff base when no `Retry-After` header is present. |
-| `MISTRAL_RETRY_MAX_SLEEP_SECONDS` | `120` | Maximum sleep between Mistral retries. |
+| `MISTRAL_MAX_RETRIES` | `5` | Retry attempts for Mistral retryable errors that include `Retry-After`. |
 | `MISTRAL_MIN_REQUEST_INTERVAL_SECONDS` | `1` | Minimum spacing between Mistral API requests. |
 
 ## Notes

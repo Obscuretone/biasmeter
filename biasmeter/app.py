@@ -22,8 +22,6 @@ from biasmeter.config import (
     MISTRAL_API_KEY,
     MISTRAL_MAX_RETRIES,
     MISTRAL_MIN_REQUEST_INTERVAL_SECONDS,
-    MISTRAL_RETRY_BASE_SECONDS,
-    MISTRAL_RETRY_MAX_SLEEP_SECONDS,
     MODEL,
     REQUEST_TIMEOUT_SECONDS,
     TOPIC_MATCH_THRESHOLD,
@@ -213,16 +211,6 @@ def is_mistral_transient_error(exc):
     return any(marker in message for marker in transient_markers)
 
 
-def resolve_mistral_retry_delay(exc, retry_count):
-    retry_after_seconds = get_retry_after_seconds(exc)
-
-    if retry_after_seconds is not None:
-        return retry_after_seconds, "server retry-after"
-
-    delay_seconds = MISTRAL_RETRY_BASE_SECONDS * (2 ** max(retry_count - 1, 0))
-    return min(delay_seconds, MISTRAL_RETRY_MAX_SLEEP_SECONDS), "exponential backoff"
-
-
 def call_mistral_with_retries(operation_name, callback):
     for retry_count in range(1, MISTRAL_MAX_RETRIES + 2):
         try:
@@ -236,12 +224,18 @@ def call_mistral_with_retries(operation_name, callback):
             if not retryable or retry_count > MISTRAL_MAX_RETRIES:
                 raise
 
-            delay_seconds, delay_source = resolve_mistral_retry_delay(exc, retry_count)
+            delay_seconds = get_retry_after_seconds(exc)
+            if delay_seconds is None:
+                print(
+                    f"{operation_name} hit a retryable Mistral error "
+                    f"({exc}) but did not include Retry-After. Not retrying."
+                )
+                raise
 
             print(
                 f"{operation_name} hit a retryable Mistral error "
-                f"({exc}). Waiting {delay_seconds:.1f}s "
-                f"({delay_source}) before retry {retry_count}/{MISTRAL_MAX_RETRIES}."
+                f"({exc}). Waiting {delay_seconds:.3f}s from Retry-After "
+                f"before retry {retry_count}/{MISTRAL_MAX_RETRIES}."
             )
             time.sleep(delay_seconds)
 
