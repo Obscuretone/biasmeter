@@ -19,12 +19,15 @@ from biasmeter.config import (
     DEFAULT_REPORT_PATH,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_MODEL,
+    MAX_ARTICLES_PER_PROVIDER_PER_TOPIC,
+    MAX_ARTICLES_PER_TOPIC,
     MISTRAL_API_KEY,
     MISTRAL_MAX_RETRIES,
     MISTRAL_MIN_REQUEST_INTERVAL_SECONDS,
     MODEL,
     REQUEST_TIMEOUT_SECONDS,
     TOPIC_MATCH_THRESHOLD,
+    WORKER_STALE_TASK_SECONDS,
     headers,
     providers,
 )
@@ -724,6 +727,32 @@ def providers_for_articles(articles):
     return {article.get("provider") for article in articles if article.get("provider")}
 
 
+def limit_topic_articles(
+    articles,
+    max_per_provider=MAX_ARTICLES_PER_PROVIDER_PER_TOPIC,
+    max_total=MAX_ARTICLES_PER_TOPIC,
+):
+    kept_articles = []
+    counts_by_provider = {}
+
+    for article in articles:
+        provider = article.get("provider")
+        if not provider:
+            continue
+
+        provider_count = counts_by_provider.get(provider, 0)
+        if provider_count >= max_per_provider:
+            continue
+
+        kept_articles.append(article)
+        counts_by_provider[provider] = provider_count + 1
+
+        if len(kept_articles) >= max_total:
+            break
+
+    return kept_articles
+
+
 def cleanup_single_source_artifacts(store):
     removed_reports = 0
     removed_report_caches = 0
@@ -808,12 +837,21 @@ def group_rss_items_by_embedding(store, rss_data, threshold=TOPIC_MATCH_THRESHOL
         best_similarity = 0.0
 
         for cluster in clusters:
-            similarity = cosine_similarity(item["embedding"], cluster["centroid"])
-            if similarity > best_similarity:
+            centroid_similarity = cosine_similarity(
+                item["embedding"], cluster["centroid"]
+            )
+            seed_similarity = cosine_similarity(
+                item["embedding"], cluster["seed_embedding"]
+            )
+            if (
+                centroid_similarity >= threshold
+                and seed_similarity >= threshold
+                and centroid_similarity > best_similarity
+            ):
                 best_cluster = cluster
-                best_similarity = similarity
+                best_similarity = centroid_similarity
 
-        if best_cluster and best_similarity >= threshold:
+        if best_cluster:
             best_cluster["items"].append(item)
             best_cluster["centroid"] = mean_embedding(
                 [cluster_item["embedding"] for cluster_item in best_cluster["items"]]
@@ -822,6 +860,7 @@ def group_rss_items_by_embedding(store, rss_data, threshold=TOPIC_MATCH_THRESHOL
             clusters.append(
                 {
                     "topic": item["title"],
+                    "seed_embedding": item["embedding"],
                     "centroid": item["embedding"],
                     "items": [item],
                 }
@@ -833,7 +872,11 @@ def group_rss_items_by_embedding(store, rss_data, threshold=TOPIC_MATCH_THRESHOL
         if len(providers_for_articles(articles)) < 2:
             continue
 
-        grouped_articles[topic] = articles
+        limited_articles = limit_topic_articles(articles)
+        if len(providers_for_articles(limited_articles)) < 2:
+            continue
+
+        grouped_articles[topic] = limited_articles
 
     for cluster in clusters:
         providers_in_cluster = {item["provider"] for item in cluster["items"]}
@@ -841,10 +884,25 @@ def group_rss_items_by_embedding(store, rss_data, threshold=TOPIC_MATCH_THRESHOL
             continue
 
         topic = cluster["topic"]
-        grouped_articles[topic] = [
-            article_reference(item["provider"], item["link"], item["embedding_text"])
-            for item in cluster["items"]
-        ]
+        sorted_items = sorted(
+            cluster["items"],
+            key=lambda cluster_item: cosine_similarity(
+                cluster_item["embedding"], cluster["seed_embedding"]
+            ),
+            reverse=True,
+        )
+        limited_articles = limit_topic_articles(
+            [
+                article_reference(
+                    item["provider"], item["link"], item["embedding_text"]
+                )
+                for item in sorted_items
+            ]
+        )
+        if len(providers_for_articles(limited_articles)) < 2:
+            continue
+
+        grouped_articles[topic] = limited_articles
 
     store.upsert(
         "embedding_grouping",
@@ -1186,8 +1244,11 @@ def process_task(store, task):
     raise RuntimeError(f"Unknown task type: {task_type}")
 
 
-def run_worker(store, once=False, sleep_seconds=5):
+def run_worker(store, once=False, sleep_seconds=5, stale_task_seconds=900):
     print("Worker started. Press Ctrl+C to stop.")
+    recovered_count = store.requeue_stale_running_tasks(stale_task_seconds)
+    if recovered_count:
+        print(f"Recovered {recovered_count} stale running task(s).")
 
     while True:
         task = store.claim_task()
@@ -1257,6 +1318,15 @@ def parse_args():
         "--once",
         action="store_true",
         help="With --worker, process one task and exit.",
+    )
+    parser.add_argument(
+        "--stale-task-seconds",
+        type=int,
+        default=WORKER_STALE_TASK_SECONDS,
+        help=(
+            "With --worker, reclaim running tasks older than this many seconds. "
+            f"Defaults to {WORKER_STALE_TASK_SECONDS}."
+        ),
     )
     parser.add_argument(
         "--render-cache",
@@ -1352,7 +1422,11 @@ def main():
 
     if args.worker:
         try:
-            run_worker(store, once=args.once)
+            run_worker(
+                store,
+                once=args.once,
+                stale_task_seconds=args.stale_task_seconds,
+            )
         finally:
             store.close()
         return

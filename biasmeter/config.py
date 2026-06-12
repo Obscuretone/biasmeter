@@ -12,10 +12,15 @@ DEFAULT_REPORT_PATH = os.getenv("REPORT_PATH", "reports/latest.html")
 DEFAULT_DB_PATH = os.getenv("DOCUMENT_DB_PATH", "data/biasmeter.sqlite")
 TOPIC_MATCH_THRESHOLD = float(os.getenv("TOPIC_MATCH_THRESHOLD", "0.82"))
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
+MAX_ARTICLES_PER_PROVIDER_PER_TOPIC = int(
+    os.getenv("MAX_ARTICLES_PER_PROVIDER_PER_TOPIC", "3")
+)
+MAX_ARTICLES_PER_TOPIC = int(os.getenv("MAX_ARTICLES_PER_TOPIC", "12"))
 MISTRAL_MAX_RETRIES = int(os.getenv("MISTRAL_MAX_RETRIES", "5"))
 MISTRAL_MIN_REQUEST_INTERVAL_SECONDS = float(
     os.getenv("MISTRAL_MIN_REQUEST_INTERVAL_SECONDS", "1")
 )
+WORKER_STALE_TASK_SECONDS = int(os.getenv("WORKER_STALE_TASK_SECONDS", "900"))
 
 providers = {
     "citynews": {

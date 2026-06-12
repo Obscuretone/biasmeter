@@ -175,6 +175,23 @@ class DocumentStore:
             "max_attempts": row["max_attempts"],
         }
 
+    def requeue_stale_running_tasks(self, stale_after_seconds):
+        delay = max(int(stale_after_seconds), 1)
+        cursor = self.connection.execute(
+            """
+            UPDATE tasks
+            SET status = 'pending',
+                available_at = CURRENT_TIMESTAMP,
+                last_error = 'Recovered stale running task',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'running'
+              AND updated_at <= datetime(CURRENT_TIMESTAMP, ?)
+            """,
+            (f"-{delay} seconds",),
+        )
+        self.connection.commit()
+        return cursor.rowcount
+
     def list_tasks(self, task_type=None):
         if task_type:
             rows = self.connection.execute(
