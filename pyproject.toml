@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto-news"
+version = "0.1.0"
+description = "Fetch Montreal news feeds and compare similar stories with Mistral."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.12.3",
+    "mistralai>=1.2.5",
+    "python-dotenv>=1.0.1",
+    "requests>=2.32.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "flake8>=7.3.0",
+    "mypy>=2.1.0",
+    "pyright>=1.1.410",
+    "ruff>=0.15.17",
+]
+
+[project.scripts]
+auto-news = "auto_news.app:main"
+
+[tool.setuptools]
+packages = ["auto_news"]
+py-modules = ["scraper"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_configs = true
