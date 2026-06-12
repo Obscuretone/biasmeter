@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import re
 import time
 import webbrowser
 from datetime import datetime, timezone
@@ -86,11 +87,35 @@ def get_exception_response(exc):
     return raw_response
 
 
+def get_header_value(headers, header_name):
+    if not headers:
+        return None
+
+    try:
+        value = headers.get(header_name)
+        if value is not None:
+            return value
+    except AttributeError:
+        pass
+
+    lowered_header_name = header_name.lower()
+    try:
+        header_items = headers.items()
+    except AttributeError:
+        return None
+
+    for key, value in header_items:
+        if str(key).lower() == lowered_header_name:
+            return value
+
+    return None
+
+
 def parse_retry_after_seconds(retry_after):
     if not retry_after:
         return None
 
-    value = retry_after.strip()
+    value = str(retry_after).strip()
     try:
         return max(float(value), 0.001)
     except ValueError:
@@ -113,13 +138,43 @@ def parse_retry_after_seconds(retry_after):
     return max(delay_seconds, 0.001)
 
 
+def parse_retry_after_from_message(message):
+    lowered_message = str(message).lower()
+    retry_patterns = (
+        r"retry(?:-|\s*)after[:=\s]+(\d+(?:\.\d+)?)\s*(ms|millisecond|milliseconds|s|sec|secs|second|seconds|m|min|mins|minute|minutes)?",
+        r"try again in\s+(\d+(?:\.\d+)?)\s*(ms|millisecond|milliseconds|s|sec|secs|second|seconds|m|min|mins|minute|minutes)?",
+        r"wait\s+(\d+(?:\.\d+)?)\s*(ms|millisecond|milliseconds|s|sec|secs|second|seconds|m|min|mins|minute|minutes)",
+    )
+
+    for pattern in retry_patterns:
+        match = re.search(pattern, lowered_message)
+        if not match:
+            continue
+
+        delay = float(match.group(1))
+        unit = match.group(2) or "seconds"
+        if unit in {"ms", "millisecond", "milliseconds"}:
+            delay = delay / 1000
+        elif unit in {"m", "min", "mins", "minute", "minutes"}:
+            delay = delay * 60
+
+        return max(delay, 0.001)
+
+    return None
+
+
 def get_retry_after_seconds(exc):
     raw_response = get_exception_response(exc)
 
-    if raw_response is None:
-        return None
+    if raw_response is not None:
+        headers = getattr(raw_response, "headers", None)
+        retry_after = get_header_value(headers, "retry-after")
+        retry_after_seconds = parse_retry_after_seconds(retry_after)
 
-    return parse_retry_after_seconds(raw_response.headers.get("retry-after"))
+        if retry_after_seconds is not None:
+            return retry_after_seconds
+
+    return parse_retry_after_from_message(exc)
 
 
 def is_mistral_rate_limit_error(exc):
@@ -158,14 +213,14 @@ def is_mistral_transient_error(exc):
     return any(marker in message for marker in transient_markers)
 
 
-def resolve_mistral_retry_delay_seconds(exc, retry_count):
+def resolve_mistral_retry_delay(exc, retry_count):
     retry_after_seconds = get_retry_after_seconds(exc)
 
     if retry_after_seconds is not None:
-        return retry_after_seconds
+        return retry_after_seconds, "server retry-after"
 
     delay_seconds = MISTRAL_RETRY_BASE_SECONDS * (2 ** max(retry_count - 1, 0))
-    return min(delay_seconds, MISTRAL_RETRY_MAX_SLEEP_SECONDS)
+    return min(delay_seconds, MISTRAL_RETRY_MAX_SLEEP_SECONDS), "exponential backoff"
 
 
 def call_mistral_with_retries(operation_name, callback):
@@ -181,15 +236,14 @@ def call_mistral_with_retries(operation_name, callback):
             if not retryable or retry_count > MISTRAL_MAX_RETRIES:
                 raise
 
-            delay_seconds = resolve_mistral_retry_delay_seconds(exc, retry_count)
-            capped_delay_seconds = min(delay_seconds, MISTRAL_RETRY_MAX_SLEEP_SECONDS)
+            delay_seconds, delay_source = resolve_mistral_retry_delay(exc, retry_count)
 
             print(
                 f"{operation_name} hit a retryable Mistral error "
-                f"({exc}). Waiting {capped_delay_seconds:.1f}s before retry "
-                f"{retry_count}/{MISTRAL_MAX_RETRIES}."
+                f"({exc}). Waiting {delay_seconds:.1f}s "
+                f"({delay_source}) before retry {retry_count}/{MISTRAL_MAX_RETRIES}."
             )
-            time.sleep(capped_delay_seconds)
+            time.sleep(delay_seconds)
 
 
 # Function to fetch and parse an RSS feed
