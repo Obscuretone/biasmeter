@@ -48,6 +48,10 @@ UTC = timezone.utc
 last_mistral_request_at = 0.0
 
 
+def progress(message):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
+
+
 class MistralRetryAfterError(RuntimeError):
     def __init__(self, operation_name, retry_after_seconds, original_error):
         self.operation_name = operation_name
@@ -526,6 +530,7 @@ def create_embeddings(texts):
     if not texts:
         return []
 
+    progress(f"Requesting embeddings for {len(texts)} item(s).")
     client = get_mistral_client()
     response = call_mistral_with_retries(
         "Mistral embedding request",
@@ -536,6 +541,7 @@ def create_embeddings(texts):
     )
     if response is None:
         raise RuntimeError("Mistral embedding response was empty")
+    progress(f"Received embeddings for {len(response.data)} item(s).")
     return [item.embedding for item in response.data]
 
 
@@ -1040,7 +1046,12 @@ def send_to_llm_for_comparison(topic, articles_content):
     """
     Send the articles' content to Mistral to flag discrepancies across providers.
     """
-    print("Finding discrepancies")
+    providers_in_content = sorted(providers_for_articles(articles_content))
+    progress(
+        "Finding discrepancies for "
+        f"{topic} using {len(articles_content)} article(s) "
+        f"from {', '.join(providers_in_content)}."
+    )
     try:
         client = get_mistral_client()
         formatted_content = "\n\n".join(
@@ -1117,6 +1128,7 @@ def send_to_llm_for_comparison(topic, articles_content):
                 },
             ),
         )
+        progress(f"Received discrepancy report for {topic}.")
         return parse_llm_json(extract_mistral_text(chat_response))
     except (MistralRetryAfterError, MistralRateLimitWithoutRetryAfterError):
         raise
@@ -1127,8 +1139,9 @@ def send_to_llm_for_comparison(topic, articles_content):
 
 def generate_topic_report(store, topic, articles, output_path=None):
     articles_content = []
+    progress(f"Starting topic report: {topic} ({len(articles)} candidate article(s)).")
 
-    for article in articles:
+    for index, article in enumerate(articles, start=1):
         provider = article.get("provider")
         url = article.get("url")
         provider_config = providers.get(provider)
@@ -1136,9 +1149,15 @@ def generate_topic_report(store, topic, articles, output_path=None):
         rss_item = store.get("rss_item", url) or {}
 
         if not provider or not url or not selectors:
+            progress(
+                f"Skipping article {index}/{len(articles)} for {topic}: missing provider, URL, or selectors."
+            )
             continue
 
         try:
+            progress(
+                f"Extracting article {index}/{len(articles)} for {topic}: {provider} {url}"
+            )
             article_content = extract_content_by_selector(
                 requests.get(
                     url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS
@@ -1161,6 +1180,13 @@ def generate_topic_report(store, topic, articles, output_path=None):
                 )
                 article_document = store_article_revision(store, article_document)
                 articles_content.append(article_document)
+                progress(
+                    f"Prepared article {index}/{len(articles)} for {topic}: {provider}"
+                )
+            else:
+                progress(
+                    f"No extractable text for article {index}/{len(articles)} for {topic}: {url}"
+                )
         except (MistralRetryAfterError, MistralRateLimitWithoutRetryAfterError):
             raise
         except Exception as e:
@@ -1171,6 +1197,10 @@ def generate_topic_report(store, topic, articles, output_path=None):
         return None
 
     extracted_providers = providers_for_articles(articles_content)
+    progress(
+        f"Extracted {len(articles_content)} article(s) for {topic} "
+        f"from {len(extracted_providers)} provider(s)."
+    )
     if len(extracted_providers) < 2:
         print(
             f"Skipping topic with only one extracted provider: {topic} "
@@ -1182,6 +1212,8 @@ def generate_topic_report(store, topic, articles, output_path=None):
 
     if not report:
         report = send_to_llm_for_comparison(topic, articles_content)
+    else:
+        progress(f"Using cached discrepancy report for {topic}.")
 
     if not report:
         return None
@@ -1192,8 +1224,9 @@ def generate_topic_report(store, topic, articles, output_path=None):
     build_topic_embedding(store, report, articles_content)
     refresh_provider_bias_summary(store)
     if output_path:
+        progress(f"Rendering cached pages after storing topic report: {topic}.")
         render_cached_report(store, output_path)
-    print(f"Stored topic report: {report.get('title') or topic}")
+    progress(f"Stored topic report: {report.get('title') or topic}")
     return report
 
 
@@ -1243,7 +1276,7 @@ def process_task(store, task):
     task_type = task["task_type"]
     payload = task["payload"]
 
-    print(f"Running task {task['id']}: {task_type}:{task['task_key']}")
+    progress(f"Running task {task['id']}: {task_type}:{task['task_key']}")
 
     if task_type == "ingest_rss":
         ingest_rss(store)
@@ -1267,6 +1300,7 @@ def process_task(store, task):
         return
 
     if task_type == "render_cached_report":
+        progress("Rendering cached report pages.")
         render_cached_report(store, payload.get("output", DEFAULT_REPORT_PATH))
         return
 
@@ -1304,6 +1338,7 @@ def run_worker(store, once=False, sleep_seconds=5, stale_task_seconds=900):
             store.fail_task(task, exc)
         else:
             store.complete_task(task["id"])
+            progress(f"Completed task {task['id']}: {task['task_type']}.")
 
         if once:
             return
