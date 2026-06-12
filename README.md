@@ -39,7 +39,7 @@ Read the cached news report in your browser:
 biasmeter --read
 ```
 
-The default report is written to `reports/latest.html`. `--read` is cache-only: it renders existing cached topic reports and opens the browser without crawling, embedding, or calling Mistral.
+The default recent-news page is written to `reports/latest.html`, with provider breakdowns beside it at `reports/provider-breakdowns.html`. `--read` is cache-only: it renders existing cached topic reports and opens the browser without crawling, embedding, or calling Mistral.
 
 Clean stale single-source reports/caches after changing grouping rules:
 
@@ -136,7 +136,7 @@ If you know the source provider, pass it for better extraction:
 biasmeter --check-url "https://globalnews.ca/..." --provider global
 ```
 
-The full report flow embeds RSS title/description text first, groups likely matching stories by embedding similarity, then uses Mistral only for the deeper sourced coverage report. The browser report starts with cumulative Provider Patterns across cached topics, then each topic has Cliffs Notes, provider-specific inclusions and omissions, framing differences, cautious bias signals, and a collapsible full sourced text. Hover over highlighted sentences in the full text to see which provider(s) support that sentence.
+The full report flow embeds RSS title/description text first, groups likely matching stories by embedding similarity, then uses Mistral only for the deeper sourced coverage report. The browser GUI has two pages: Recent News for Cliffs Notes, source links, and sourced full text; Provider Breakdowns for cumulative Provider Patterns plus per-topic inclusions, omissions, framing differences, and cautious bias signals. Hover over highlighted sentences in the full text to see which provider(s) support that sentence.
 
 Each run stores JSON documents in SQLite:
 
@@ -152,7 +152,7 @@ Each run stores JSON documents in SQLite:
 - `manual_article`: arbitrary URLs checked with `--check-url`.
 - `topic_report`: Mistral's sourced coverage and discrepancy report for a topic.
 - `provider_bias_summary`: cumulative provider inclusion, omission, framing, and bias-signal counts across cached topic reports.
-- `html_report`: generated report metadata.
+- `html_report`: generated two-page browser report metadata.
 
 Reruns are cache-first: unchanged RSS/article embeddings are reused, article text is hashed, changed articles create new `article_revision` documents with simple added/removed sentence diffs, and unchanged topic inputs reuse `topic_report_cache` instead of calling Mistral again.
 

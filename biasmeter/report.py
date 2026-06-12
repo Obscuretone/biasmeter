@@ -208,11 +208,13 @@ def render_provider_patterns(patterns):
     """
 
 
-def render_html_report(reports, output_path):
-    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    topic_sections = []
-    provider_patterns = build_provider_patterns(reports)
+def provider_breakdowns_path(output_path):
+    output_path = Path(output_path)
+    return output_path.with_name("provider-breakdowns.html")
 
+
+def render_topic_sections(reports, include_analysis=True):
+    topic_sections = []
     for report in reports:
         title = html.escape(
             report.get("title") or report.get("topic") or "Untitled topic"
@@ -253,6 +255,24 @@ def render_html_report(reports, output_path):
             for provider, urls in sorted(source_links.items())
         )
 
+        analysis_html = ""
+        if include_analysis:
+            analysis_html = f"""
+                <h3>Provider-Specific Inclusions</h3>
+                {render_list_items(report.get("provider_specific_inclusions", []), format_provider_inclusion)}
+
+                <h3>Provider-Specific Omissions</h3>
+                {render_list_items(report.get("provider_specific_omissions", []), format_provider_omission)}
+
+                <h3>Framing Differences</h3>
+                {render_list_items(report.get("framing_differences", []), format_framing_difference)}
+
+                <h3>Potential Bias Signals</h3>
+                {render_list_items(report.get("potential_bias_signals", []), format_bias_signal)}
+
+                <p class="confidence">Overall confidence: {html.escape(report.get("confidence", "unknown"))}</p>
+            """
+
         topic_sections.append(
             f"""
             <section class="topic">
@@ -273,22 +293,25 @@ def render_html_report(reports, output_path):
                     <ul>{source_link_html}</ul>
                 </details>
 
-                <h3>Provider-Specific Inclusions</h3>
-                {render_list_items(report.get("provider_specific_inclusions", []), format_provider_inclusion)}
-
-                <h3>Provider-Specific Omissions</h3>
-                {render_list_items(report.get("provider_specific_omissions", []), format_provider_omission)}
-
-                <h3>Framing Differences</h3>
-                {render_list_items(report.get("framing_differences", []), format_framing_difference)}
-
-                <h3>Potential Bias Signals</h3>
-                {render_list_items(report.get("potential_bias_signals", []), format_bias_signal)}
-
-                <p class="confidence">Overall confidence: {html.escape(report.get("confidence", "unknown"))}</p>
+                {analysis_html}
             </section>
             """
         )
+
+    return "".join(topic_sections)
+
+
+def render_page(title, subtitle, active_page, body_html, output_path, recent_path):
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    recent_class = "active" if active_page == "recent" else ""
+    providers_class = "active" if active_page == "providers" else ""
+    output_path = Path(output_path)
+    recent_href = html.escape(
+        Path(recent_path).name if active_page == "providers" else "#"
+    )
+    providers_href = html.escape(
+        provider_breakdowns_path(recent_path).name if active_page == "recent" else "#"
+    )
 
     document = f"""
     <!doctype html>
@@ -296,7 +319,7 @@ def render_html_report(reports, output_path):
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Biasmeter Coverage Report</title>
+        <title>{html.escape(title)}</title>
         <style>
             :root {{
                 color-scheme: light dark;
@@ -318,6 +341,25 @@ def render_html_report(reports, output_path):
                 max-width: 980px;
                 margin: 0 auto;
                 padding: 24px;
+            }}
+            nav {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 18px;
+            }}
+            nav a {{
+                border: 1px solid var(--border);
+                border-radius: 999px;
+                color: var(--text);
+                font-weight: 700;
+                padding: 7px 14px;
+                text-decoration: none;
+            }}
+            nav a.active {{
+                background: rgba(255, 209, 102, 0.14);
+                border-color: rgba(255, 209, 102, 0.45);
+                color: var(--accent);
             }}
             .topic {{
                 background: var(--card);
@@ -399,20 +441,48 @@ def render_html_report(reports, output_path):
     </head>
     <body>
         <header>
-            <h1>Biasmeter Coverage Report</h1>
+            <h1>{html.escape(title)}</h1>
+            <p class="muted">{html.escape(subtitle)}</p>
             <p class="muted">Generated {html.escape(generated_at)}. Hover over highlighted sentences to see which provider each sentence came from.</p>
+            <nav aria-label="Biasmeter pages">
+                <a class="{recent_class}" href="{recent_href}">Recent News</a>
+                <a class="{providers_class}" href="{providers_href}">Provider Breakdowns</a>
+            </nav>
         </header>
         <main>
-            {render_provider_patterns(provider_patterns)}
-            {"".join(topic_sections)}
+            {body_html}
         </main>
     </body>
     </html>
     """
 
-    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(document, encoding="utf-8")
+    return output_path
+
+
+def render_html_report(reports, output_path):
+    output_path = Path(output_path)
+    provider_path = provider_breakdowns_path(output_path)
+    provider_patterns = build_provider_patterns(reports)
+
+    render_page(
+        "Biasmeter Recent News",
+        "A cache-first news reader with concise factual notes and sourced full text.",
+        "recent",
+        render_topic_sections(reports, include_analysis=False),
+        output_path,
+        output_path,
+    )
+    render_page(
+        "Biasmeter Provider Breakdowns",
+        "Long-term inclusion, omission, framing, and bias-signal patterns across cached coverage.",
+        "providers",
+        render_provider_patterns(provider_patterns)
+        + render_topic_sections(reports, include_analysis=True),
+        provider_path,
+        output_path,
+    )
     return output_path
 
 
@@ -430,6 +500,11 @@ def render_cached_report(store, output_path):
         str(output_path),
         {
             "path": str(output_path),
+            "provider_breakdowns_path": str(provider_breakdowns_path(output_path)),
+            "paths": {
+                "recent_news": str(output_path),
+                "provider_breakdowns": str(provider_breakdowns_path(output_path)),
+            },
             "topic_count": len(reports),
             "topics": [report.get("title") for report in reports],
             "generated_at": datetime.now().isoformat(),
@@ -445,5 +520,6 @@ def render_cached_report(store, output_path):
             "providers": provider_patterns,
         },
     )
-    print(f"Cached report written to {output_path}")
+    print(f"Recent news written to {output_path}")
+    print(f"Provider breakdowns written to {provider_breakdowns_path(output_path)}")
     return output_path
