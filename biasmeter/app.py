@@ -1307,8 +1307,12 @@ def process_task(store, task):
     raise RuntimeError(f"Unknown task type: {task_type}")
 
 
-def run_worker(store, once=False, sleep_seconds=5, stale_task_seconds=900):
-    print("Worker started. Press Ctrl+C to stop.")
+def run_worker(store, once=False, watch=False, sleep_seconds=5, stale_task_seconds=900):
+    if watch:
+        print("Worker started in watch mode. Press Ctrl+C to stop.")
+    else:
+        print("Worker started. It will exit when no runnable tasks remain.")
+
     recovered_count = store.requeue_stale_running_tasks(stale_task_seconds)
     if recovered_count:
         print(f"Recovered {recovered_count} stale running task(s).")
@@ -1317,8 +1321,8 @@ def run_worker(store, once=False, sleep_seconds=5, stale_task_seconds=900):
         task = store.claim_task()
 
         if not task:
-            if once:
-                print("No pending tasks.")
+            if once or not watch:
+                print("No runnable tasks.")
                 return
 
             time.sleep(sleep_seconds)
@@ -1382,6 +1386,11 @@ def parse_args():
         "--once",
         action="store_true",
         help="With --worker, process one task and exit.",
+    )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="With --worker, keep watching for future tasks instead of exiting when the queue is drained.",
     )
     parser.add_argument(
         "--stale-task-seconds",
@@ -1489,6 +1498,7 @@ def main():
             run_worker(
                 store,
                 once=args.once,
+                watch=args.watch,
                 stale_task_seconds=args.stale_task_seconds,
             )
         finally:

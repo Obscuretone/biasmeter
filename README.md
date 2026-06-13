@@ -27,7 +27,7 @@ Scan for new/changed news and queue background processing:
 biasmeter --scan
 ```
 
-Run the worker to process queued scan tasks:
+Run the worker to process queued scan tasks. It exits when no runnable tasks remain:
 
 ```bash
 biasmeter --worker
@@ -51,6 +51,12 @@ For step-by-step debugging, process one queued task and exit:
 
 ```bash
 biasmeter --worker --once
+```
+
+Keep watching for future queued work:
+
+```bash
+biasmeter --worker --watch
 ```
 
 Or run the script directly:
@@ -156,7 +162,7 @@ Each run stores JSON documents in SQLite:
 
 Reruns are cache-first: unchanged RSS/article embeddings are reused, article text is hashed, changed articles create new `article_revision` documents with simple added/removed sentence diffs, and unchanged topic inputs reuse `topic_report_cache` instead of calling Mistral again.
 
-Background work is stored in the `tasks` table. The worker handles RSS ingestion, RSS embedding, topic grouping, per-topic report generation, and cached report rendering. The browser-facing path renders from cache while ingestion/spider/LLM work happens separately.
+Background work is stored in the `tasks` table. The worker handles RSS ingestion, RSS embedding, topic grouping, per-topic report generation, and cached report rendering, then exits when no runnable tasks remain. Use `biasmeter --worker --watch` if you want it to keep polling for future tasks. The browser-facing path renders from cache while ingestion/spider/LLM work happens separately.
 
 Topic grouping is incremental: newly embedded RSS items are compared against existing `topic_embedding` documents as well as the current scan batch. A topic report is only generated when at least two providers have extractable article text, so single-source stories are stored but skipped for comparison.
 
