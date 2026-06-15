@@ -306,7 +306,6 @@ def source_entries_for_report(report):
 
 def build_coverage_profile(store, reports):
     provider_data = {}
-    matched_urls_by_provider = {}
     topic_provider_sets = []
 
     def data_for_provider(provider):
@@ -349,7 +348,6 @@ def build_coverage_profile(store, reports):
                 continue
 
             data_for_provider(provider)["matched_urls"].add(normalized_url)
-            matched_urls_by_provider.setdefault(provider, set()).add(normalized_url)
             report_providers.add(provider)
 
         if len(report_providers) > 1:
