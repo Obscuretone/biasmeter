@@ -463,6 +463,11 @@ def provider_breakdowns_path(output_path):
     return output_path.with_name("provider-breakdowns.html")
 
 
+def provider_analysis_path(output_path):
+    output_path = Path(output_path)
+    return output_path.with_name("provider-analysis.html")
+
+
 def render_topic_sections(reports, include_analysis=True):
     topic_sections = []
     for report in reports:
@@ -555,12 +560,18 @@ def render_page(title, subtitle, active_page, body_html, output_path, recent_pat
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     recent_class = "active" if active_page == "recent" else ""
     providers_class = "active" if active_page == "providers" else ""
+    analysis_class = "active" if active_page == "analysis" else ""
     output_path = Path(output_path)
     recent_href = html.escape(
-        Path(recent_path).name if active_page == "providers" else "#"
+        Path(recent_path).name if active_page != "recent" else "#"
     )
     providers_href = html.escape(
-        provider_breakdowns_path(recent_path).name if active_page == "recent" else "#"
+        provider_breakdowns_path(recent_path).name
+        if active_page != "providers"
+        else "#"
+    )
+    analysis_href = html.escape(
+        provider_analysis_path(recent_path).name if active_page != "analysis" else "#"
     )
 
     document = f"""
@@ -610,6 +621,14 @@ def render_page(title, subtitle, active_page, body_html, output_path, recent_pat
                 background: rgba(255, 209, 102, 0.14);
                 border-color: rgba(255, 209, 102, 0.45);
                 color: var(--accent);
+            }}
+            .analysis-card {{
+                border-top: 1px solid var(--border);
+                margin-top: 18px;
+                padding-top: 14px;
+            }}
+            .analysis-card p {{
+                margin: 10px 0;
             }}
             .topic {{
                 background: var(--card);
@@ -697,6 +716,7 @@ def render_page(title, subtitle, active_page, body_html, output_path, recent_pat
             <nav aria-label="Biasmeter pages">
                 <a class="{recent_class}" href="{recent_href}">Recent News</a>
                 <a class="{providers_class}" href="{providers_href}">Provider Breakdowns</a>
+                <a class="{analysis_class}" href="{analysis_href}">Provider Analysis</a>
             </nav>
         </header>
         <main>
@@ -711,9 +731,59 @@ def render_page(title, subtitle, active_page, body_html, output_path, recent_pat
     return output_path
 
 
-def render_html_report(reports, output_path):
+def format_analysis_paragraphs(paragraphs):
+    if not paragraphs:
+        return '<p class="muted">No LLM analysis has been generated yet.</p>'
+
+    return "".join(f"<p>{html.escape(str(paragraph))}</p>" for paragraph in paragraphs)
+
+
+def render_provider_analysis(analysis_report):
+    if not analysis_report:
+        return """
+        <section class="topic provider-analysis">
+            <h2>Provider Analysis</h2>
+            <p class="muted">No provider analysis has been generated yet. Run the worker after a scan to generate this cached LLM report.</p>
+        </section>
+        """
+
+    overview = analysis_report.get("overall_summary", "")
+    generated_at = analysis_report.get("generated_at", "")
+    provider_sections = []
+
+    for provider_report in analysis_report.get("providers", []):
+        provider = provider_report.get("provider", "unknown")
+        provider_sections.append(
+            f"""
+            <article class="analysis-card">
+                <h3>{html.escape(provider)}</h3>
+                <h4>What They Tend To Ignore</h4>
+                {format_analysis_paragraphs(provider_report.get("tends_to_ignore", []))}
+                <h4>What They Tend To Cover Exclusively</h4>
+                {format_analysis_paragraphs(provider_report.get("tends_to_cover_exclusively", []))}
+                <h4>Bias Trends</h4>
+                {format_analysis_paragraphs(provider_report.get("bias_trends", []))}
+                <p class="muted">Confidence: {html.escape(provider_report.get("confidence", "unknown"))}</p>
+            </article>
+            """
+        )
+
+    return f"""
+    <section class="topic provider-analysis">
+        <h2>Provider Analysis</h2>
+        <p class="muted">Generated from accumulated provider signals. Treat this as a hypothesis report, not proof of intent.</p>
+        <p class="muted">Analysis generated: {html.escape(generated_at)}</p>
+        <h3>Overall</h3>
+        {format_analysis_paragraphs([overview] if overview else [])}
+        {"".join(provider_sections)}
+    </section>
+    """
+
+
+def render_html_report(reports, output_path, provider_analysis=None):
     output_path = Path(output_path)
     provider_path = provider_breakdowns_path(output_path)
+    analysis_path = provider_analysis_path(output_path)
     provider_patterns = build_provider_patterns(reports)
 
     render_page(
@@ -733,27 +803,38 @@ def render_html_report(reports, output_path):
         provider_path,
         output_path,
     )
+    render_page(
+        "Biasmeter Provider Analysis",
+        "LLM-distilled analysis of what each provider tends to ignore, cover exclusively, and frame consistently.",
+        "analysis",
+        render_provider_analysis(provider_analysis),
+        analysis_path,
+        output_path,
+    )
     return output_path
 
 
 def render_cached_report(store, output_path):
     reports = [row["content"] for row in store.list_by_type("topic_report")]
     provider_patterns = build_provider_patterns(reports)
+    provider_analysis = store.get("provider_analysis_report", "latest")
 
     if not reports:
         print("No cached topic reports found yet.")
         return None
 
-    output_path = render_html_report(reports, output_path)
+    output_path = render_html_report(reports, output_path, provider_analysis)
     store.upsert(
         "html_report",
         str(output_path),
         {
             "path": str(output_path),
             "provider_breakdowns_path": str(provider_breakdowns_path(output_path)),
+            "provider_analysis_path": str(provider_analysis_path(output_path)),
             "paths": {
                 "recent_news": str(output_path),
                 "provider_breakdowns": str(provider_breakdowns_path(output_path)),
+                "provider_analysis": str(provider_analysis_path(output_path)),
             },
             "topic_count": len(reports),
             "topics": [report.get("title") for report in reports],
@@ -772,4 +853,5 @@ def render_cached_report(store, output_path):
     )
     print(f"Recent news written to {output_path}")
     print(f"Provider breakdowns written to {provider_breakdowns_path(output_path)}")
+    print(f"Provider analysis written to {provider_analysis_path(output_path)}")
     return output_path

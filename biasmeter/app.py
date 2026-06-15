@@ -1030,16 +1030,121 @@ def build_topic_embedding(store, report, articles_content):
 def refresh_provider_bias_summary(store):
     reports = [row["content"] for row in store.list_by_type("topic_report")]
     provider_patterns = build_provider_patterns(reports)
+    signal_hash = stable_json_hash(provider_patterns)
     store.upsert(
         "provider_bias_summary",
         "latest",
         {
             "generated_at": datetime.now().isoformat(),
             "topic_count": len(reports),
+            "signal_hash": signal_hash,
             "providers": provider_patterns,
         },
     )
     return provider_patterns
+
+
+def compact_provider_signals(provider_patterns):
+    compacted = {}
+    for provider, pattern in provider_patterns.items():
+        compacted[provider] = {
+            "summary": pattern.get("summary"),
+            "counts": pattern.get("counts", {}),
+            "observed_topic_count": pattern.get("observed_topic_count", 0),
+            "strongest_themes": pattern.get("strongest_themes", []),
+            "examples": {
+                category: examples[:5]
+                for category, examples in pattern.get("examples", {}).items()
+            },
+        }
+
+    return compacted
+
+
+def get_cached_provider_analysis(store, signal_hash):
+    cached_analysis = store.get("provider_analysis_report", "latest")
+    if cached_analysis and cached_analysis.get("signal_hash") == signal_hash:
+        return cached_analysis
+
+    return None
+
+
+def generate_provider_analysis_report(store, output_path=None):
+    provider_summary = store.get("provider_bias_summary", "latest")
+    if provider_summary:
+        provider_patterns = provider_summary.get("providers", {})
+    else:
+        provider_patterns = refresh_provider_bias_summary(store)
+
+    if not provider_patterns:
+        print("No provider signals found for analysis.")
+        return None
+
+    signal_hash = stable_json_hash(provider_patterns)
+    cached_analysis = get_cached_provider_analysis(store, signal_hash)
+    if cached_analysis:
+        progress("Using cached provider analysis report.")
+        return cached_analysis
+
+    progress(
+        f"Generating provider analysis report from {len(provider_patterns)} provider(s)."
+    )
+    client = get_mistral_client()
+    prompt_signals = compact_provider_signals(provider_patterns)
+    chat_response = call_mistral_with_retries(
+        "Mistral provider analysis request",
+        lambda: client.chat.complete(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You analyze accumulated media coverage discrepancy signals. "
+                        "Write careful English analysis about recurring provider behavior. "
+                        "Do not claim motive, intent, or certainty. Treat signals as patterns to watch. "
+                        "Distinguish exclusions, exclusive inclusions, and framing/bias trends."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Using only the provider signals below, return JSON with this shape:\n"
+                        "{\n"
+                        '  "overall_summary": "one concise paragraph about cross-provider patterns",\n'
+                        '  "providers": [\n'
+                        "    {\n"
+                        '      "provider": "provider name",\n'
+                        '      "tends_to_ignore": ["1-2 paragraphs about recurring omitted information types"],\n'
+                        '      "tends_to_cover_exclusively": ["1-2 paragraphs about recurring unique inclusions"],\n'
+                        '      "bias_trends": ["1-2 paragraphs about recurring framing or bias signals"],\n'
+                        '      "confidence": "high|medium|low"\n'
+                        "    }\n"
+                        "  ]\n"
+                        "}\n\n"
+                        "If evidence is thin, say so and use low confidence. "
+                        "Do not mention providers with no meaningful signals. "
+                        "Use concrete recurring information types and examples when available. "
+                        "Avoid moral judgment; this is an evidence memo.\n\n"
+                        f"{json.dumps(prompt_signals, ensure_ascii=False)}"
+                    ),
+                },
+            ],
+            response_format={
+                "type": "json_object",
+            },
+        ),
+    )
+    analysis_report = parse_llm_json(extract_mistral_text(chat_response))
+    analysis_report["generated_at"] = datetime.now().isoformat()
+    analysis_report["signal_hash"] = signal_hash
+    analysis_report["provider_count"] = len(provider_patterns)
+    store.upsert("provider_analysis_report", "latest", analysis_report)
+    progress("Stored provider analysis report.")
+
+    if output_path:
+        render_cached_report(store, output_path)
+
+    return analysis_report
 
 
 def send_to_llm_for_comparison(topic, articles_content):
@@ -1224,8 +1329,7 @@ def generate_topic_report(store, topic, articles, output_path=None):
     build_topic_embedding(store, report, articles_content)
     refresh_provider_bias_summary(store)
     if output_path:
-        progress(f"Rendering cached pages after storing topic report: {topic}.")
-        render_cached_report(store, output_path)
+        generate_provider_analysis_report(store, output_path)
     progress(f"Stored topic report: {report.get('title') or topic}")
     return report
 
@@ -1252,6 +1356,13 @@ def enqueue_topic_report_tasks(store, output_path=DEFAULT_REPORT_PATH):
             max_attempts=3,
         )
 
+    store.enqueue_task(
+        "generate_provider_analysis",
+        "latest",
+        {
+            "output": output_path,
+        },
+    )
     store.enqueue_task(
         "render_cached_report",
         "latest",
@@ -1296,6 +1407,13 @@ def process_task(store, task):
             payload["topic"],
             payload["articles"],
             payload.get("output"),
+        )
+        return
+
+    if task_type == "generate_provider_analysis":
+        generate_provider_analysis_report(
+            store,
+            payload.get("output", DEFAULT_REPORT_PATH),
         )
         return
 
