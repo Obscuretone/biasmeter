@@ -1070,11 +1070,7 @@ def get_cached_provider_analysis(store, signal_hash):
 
 
 def generate_provider_analysis_report(store, output_path=None):
-    provider_summary = store.get("provider_bias_summary", "latest")
-    if provider_summary:
-        provider_patterns = provider_summary.get("providers", {})
-    else:
-        provider_patterns = refresh_provider_bias_summary(store)
+    provider_patterns = refresh_provider_bias_summary(store)
 
     if not provider_patterns:
         print("No provider signals found for analysis.")

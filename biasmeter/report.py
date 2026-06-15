@@ -1,4 +1,6 @@
+import hashlib
 import html
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -112,11 +114,58 @@ INFORMATION_TYPE_KEYWORDS = {
     ),
 }
 
+PROVIDER_ALIASES = {
+    "citynews": "citynews",
+    "city news": "citynews",
+    "citynews montreal": "citynews",
+    "global": "global",
+    "global news": "global",
+    "global montreal": "global",
+    "la presse": "la-presse",
+    "la presse (1)": "la-presse",
+    "la presse (2)": "la-presse",
+    "lapresse": "la-presse",
+    "la-presse": "la-presse",
+    "montreal times": "montreal-times",
+    "montreal-times": "montreal-times",
+    "mtl blog": "mtl-blog",
+    "mtl-blog": "mtl-blog",
+    "mtlblog": "mtl-blog",
+    "suburban": "suburban",
+    "the suburban": "suburban",
+}
+
+PROVIDER_DISPLAY_NAMES = {
+    "citynews": "CityNews",
+    "global": "Global News",
+    "la-presse": "La Presse",
+    "montreal-times": "Montreal Times",
+    "mtl-blog": "MTL Blog",
+    "suburban": "The Suburban",
+}
+
+
+def stable_json_hash(value):
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def canonical_provider_key(provider):
+    normalized_provider = re.sub(r"\s+", " ", str(provider or "unknown")).strip()
+    normalized_provider = normalized_provider.lower()
+    normalized_provider = re.sub(r"\s*#\d+$", "", normalized_provider)
+    return PROVIDER_ALIASES.get(normalized_provider, normalized_provider or "unknown")
+
+
+def display_provider_name(provider):
+    provider_key = canonical_provider_key(provider)
+    return PROVIDER_DISPLAY_NAMES.get(provider_key, str(provider or provider_key))
+
 
 def tooltip_for_sources(sources):
     source_lines = []
     for source in sources:
-        provider = source.get("provider", "unknown")
+        provider = display_provider_name(source.get("provider", "unknown"))
         support = source.get("support", "")
         source_lines.append(f"{provider}: {support}")
 
@@ -135,9 +184,13 @@ def format_cliffs_note(item):
 
 
 def format_provider_inclusion(item):
-    provider = html.escape(item.get("provider", "unknown"))
+    provider = html.escape(display_provider_name(item.get("provider", "unknown")))
     detail = html.escape(item.get("detail", ""))
-    absent_from = html.escape(", ".join(item.get("absent_from", [])))
+    absent_from = html.escape(
+        ", ".join(
+            display_provider_name(provider) for provider in item.get("absent_from", [])
+        )
+    )
     why_it_matters = html.escape(item.get("why_it_matters", ""))
     return (
         f"<strong>{provider}</strong>: {detail} "
@@ -147,9 +200,13 @@ def format_provider_inclusion(item):
 
 
 def format_provider_omission(item):
-    provider = html.escape(item.get("provider", "unknown"))
+    provider = html.escape(display_provider_name(item.get("provider", "unknown")))
     missing_detail = html.escape(item.get("missing_detail", ""))
-    covered_by = html.escape(", ".join(item.get("covered_by", [])))
+    covered_by = html.escape(
+        ", ".join(
+            display_provider_name(provider) for provider in item.get("covered_by", [])
+        )
+    )
     why_it_matters = html.escape(item.get("why_it_matters", ""))
     return (
         f"<strong>{provider}</strong>: {missing_detail} "
@@ -159,7 +216,11 @@ def format_provider_omission(item):
 
 
 def format_framing_difference(item):
-    providers = html.escape(", ".join(item.get("providers", [])))
+    providers = html.escape(
+        ", ".join(
+            display_provider_name(provider) for provider in item.get("providers", [])
+        )
+    )
     difference = html.escape(item.get("difference", ""))
     return f"<strong>{providers}</strong>: {difference}"
 
@@ -168,8 +229,14 @@ def format_bias_signal(item):
     confidence = html.escape(item.get("confidence", "unknown"))
     signal = html.escape(item.get("signal", ""))
     evidence = html.escape(item.get("evidence", ""))
+    providers = html.escape(
+        ", ".join(
+            display_provider_name(provider) for provider in item.get("providers", [])
+        )
+    )
     return (
         f"<strong>{confidence} confidence</strong>: {signal}<br>"
+        f'<span class="muted">Providers: {providers}</span><br>'
         f'<span class="muted">{evidence}</span>'
     )
 
@@ -226,7 +293,7 @@ def build_provider_patterns(reports):
     patterns = {}
 
     def pattern_for(provider):
-        provider = provider or "unknown"
+        provider = display_provider_name(provider)
         if provider not in patterns:
             patterns[provider] = new_provider_pattern()
         return patterns[provider]
@@ -483,7 +550,12 @@ def render_topic_sections(reports, include_analysis=True):
             sources = entry.get("sources", [])
             tooltip = html.escape(tooltip_for_sources(sources), quote=True)
             providers = ", ".join(
-                sorted({source.get("provider", "unknown") for source in sources})
+                sorted(
+                    {
+                        display_provider_name(source.get("provider", "unknown"))
+                        for source in sources
+                    }
+                )
             )
             sourced_sentences.append(
                 f'<span class="sourced-sentence" title="{tooltip}">'
@@ -495,7 +567,7 @@ def render_topic_sections(reports, include_analysis=True):
         source_links = {}
         for entry in full_text:
             for source in entry.get("sources", []):
-                provider = source.get("provider", "unknown")
+                provider = display_provider_name(source.get("provider", "unknown"))
                 url = source.get("url")
                 if url:
                     source_links.setdefault(provider, set()).add(url)
@@ -750,8 +822,30 @@ def render_provider_analysis(analysis_report):
     overview = analysis_report.get("overall_summary", "")
     generated_at = analysis_report.get("generated_at", "")
     provider_sections = []
+    normalized_provider_reports = {}
 
     for provider_report in analysis_report.get("providers", []):
+        provider = display_provider_name(provider_report.get("provider", "unknown"))
+        normalized_report = normalized_provider_reports.setdefault(
+            provider,
+            {
+                "provider": provider,
+                "tends_to_ignore": [],
+                "tends_to_cover_exclusively": [],
+                "bias_trends": [],
+                "confidence": provider_report.get("confidence", "unknown"),
+            },
+        )
+        for field in ("tends_to_ignore", "tends_to_cover_exclusively", "bias_trends"):
+            for paragraph in provider_report.get(field, []):
+                if paragraph not in normalized_report[field]:
+                    normalized_report[field].append(paragraph)
+        if normalized_report["confidence"] == "unknown":
+            normalized_report["confidence"] = provider_report.get(
+                "confidence", "unknown"
+            )
+
+    for provider_report in normalized_provider_reports.values():
         provider = provider_report.get("provider", "unknown")
         provider_sections.append(
             f"""
@@ -818,6 +912,9 @@ def render_cached_report(store, output_path):
     reports = [row["content"] for row in store.list_by_type("topic_report")]
     provider_patterns = build_provider_patterns(reports)
     provider_analysis = store.get("provider_analysis_report", "latest")
+    signal_hash = stable_json_hash(provider_patterns)
+    if provider_analysis and provider_analysis.get("signal_hash") != signal_hash:
+        provider_analysis = None
 
     if not reports:
         print("No cached topic reports found yet.")
@@ -848,6 +945,7 @@ def render_cached_report(store, output_path):
         {
             "generated_at": datetime.now().isoformat(),
             "topic_count": len(reports),
+            "signal_hash": signal_hash,
             "providers": provider_patterns,
         },
     )
