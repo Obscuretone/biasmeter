@@ -143,7 +143,7 @@ If you know the source provider, pass it for better extraction:
 biasmeter --check-url "https://globalnews.ca/..." --provider global
 ```
 
-The full report flow embeds RSS title/description text first, groups likely matching stories by embedding similarity, then uses Mistral only for deeper sourced reports and cached provider analysis. The browser GUI has three pages: Recent News for Cliffs Notes, source links, and sourced full text; Provider Breakdowns for cumulative Provider Patterns plus per-provider summaries of recurring inclusions, omissions, framing differences, cautious bias signals, and repeated information types; and Provider Analysis for a few LLM-written paragraphs about what each outlet tends to ignore, cover exclusively, and frame consistently. Provider summaries and analysis are refreshed whenever new topic reports change the underlying signals. Hover over highlighted sentences in the full text to see which provider(s) support that sentence.
+The full report flow embeds RSS title/description text first, groups likely matching stories by embedding similarity, then uses Mistral only for deeper sourced reports and cached provider analysis. The browser GUI has three pages: Recent News for Cliffs Notes, source links, and sourced full text; Provider Breakdowns for a Coverage Profile plus cumulative Provider Patterns, including per-provider summaries of recurring inclusions, omissions, framing differences, cautious bias signals, repeated information types, solo coverage rates, overlap pairs, and recent unmatched examples; and Provider Analysis for a few LLM-written paragraphs about what each outlet tends to ignore, cover exclusively, and frame consistently. Provider summaries and analysis are refreshed whenever new topic reports or coverage-profile signals change. Hover over highlighted sentences in the full text to see which provider(s) support that sentence.
 
 Each run stores JSON documents in SQLite:
 
@@ -159,7 +159,8 @@ Each run stores JSON documents in SQLite:
 - `manual_article`: arbitrary URLs checked with `--check-url`.
 - `topic_report`: Mistral's sourced coverage and discrepancy report for a topic.
 - `provider_bias_summary`: cumulative provider inclusion, omission, framing, and bias-signal counts across cached topic reports.
-- `provider_analysis_report`: cached LLM-written provider analysis keyed by the current provider-signal hash.
+- `coverage_profile`: RSS-level overlap and solo-coverage profile keyed by provider.
+- `provider_analysis_report`: cached LLM-written provider analysis keyed by the current provider-signal and coverage-profile hash.
 - `html_report`: generated three-page browser report metadata.
 
 Reruns are cache-first: unchanged RSS/article embeddings are reused, article text is hashed, changed articles create new `article_revision` documents with simple added/removed sentence diffs, and unchanged topic inputs reuse `topic_report_cache` instead of calling Mistral again.

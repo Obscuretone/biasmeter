@@ -32,7 +32,9 @@ from biasmeter.config import (
     providers,
 )
 from biasmeter.report import (
+    build_coverage_profile,
     build_provider_patterns,
+    coverage_profile_signal,
     render_cached_report,
     render_html_report,
 )
@@ -1030,7 +1032,14 @@ def build_topic_embedding(store, report, articles_content):
 def refresh_provider_bias_summary(store):
     reports = [row["content"] for row in store.list_by_type("topic_report")]
     provider_patterns = build_provider_patterns(reports)
-    signal_hash = stable_json_hash(provider_patterns)
+    coverage_profile = build_coverage_profile(store, reports)
+    signal_hash = stable_json_hash(
+        {
+            "provider_patterns": provider_patterns,
+            "coverage_profile": coverage_profile_signal(coverage_profile),
+        }
+    )
+    store.upsert("coverage_profile", "latest", coverage_profile)
     store.upsert(
         "provider_bias_summary",
         "latest",
@@ -1039,9 +1048,10 @@ def refresh_provider_bias_summary(store):
             "topic_count": len(reports),
             "signal_hash": signal_hash,
             "providers": provider_patterns,
+            "coverage_profile": coverage_profile,
         },
     )
-    return provider_patterns
+    return provider_patterns, coverage_profile
 
 
 def compact_provider_signals(provider_patterns):
@@ -1061,6 +1071,32 @@ def compact_provider_signals(provider_patterns):
     return compacted
 
 
+def compact_coverage_profile(coverage_profile):
+    compacted = {
+        "rss_item_count": coverage_profile.get("rss_item_count", 0),
+        "matched_topic_count": coverage_profile.get("matched_topic_count", 0),
+        "multi_provider_topic_count": coverage_profile.get(
+            "multi_provider_topic_count", 0
+        ),
+        "providers": {},
+        "most_overlap": coverage_profile.get("most_overlap", [])[:8],
+        "least_overlap": coverage_profile.get("least_overlap", [])[:8],
+    }
+
+    for provider, profile in coverage_profile.get("providers", {}).items():
+        compacted["providers"][provider] = {
+            "total_items": profile.get("total_items", 0),
+            "matched_items": profile.get("matched_items", 0),
+            "solo_items": profile.get("solo_items", 0),
+            "solo_rate": profile.get("solo_rate", 0),
+            "coverage_types": profile.get("coverage_types", [])[:6],
+            "solo_coverage_types": profile.get("solo_coverage_types", [])[:6],
+            "solo_examples": profile.get("solo_examples", [])[:3],
+        }
+
+    return compacted
+
+
 def get_cached_provider_analysis(store, signal_hash):
     cached_analysis = store.get("provider_analysis_report", "latest")
     if cached_analysis and cached_analysis.get("signal_hash") == signal_hash:
@@ -1070,23 +1106,32 @@ def get_cached_provider_analysis(store, signal_hash):
 
 
 def generate_provider_analysis_report(store, output_path=None):
-    provider_patterns = refresh_provider_bias_summary(store)
+    provider_patterns, coverage_profile = refresh_provider_bias_summary(store)
 
-    if not provider_patterns:
+    if not provider_patterns and not coverage_profile.get("providers"):
         print("No provider signals found for analysis.")
         return None
 
-    signal_hash = stable_json_hash(provider_patterns)
+    signal_hash = stable_json_hash(
+        {
+            "provider_patterns": provider_patterns,
+            "coverage_profile": coverage_profile_signal(coverage_profile),
+        }
+    )
     cached_analysis = get_cached_provider_analysis(store, signal_hash)
     if cached_analysis:
         progress("Using cached provider analysis report.")
         return cached_analysis
 
     progress(
-        f"Generating provider analysis report from {len(provider_patterns)} provider(s)."
+        "Generating provider analysis report from "
+        f"{len(coverage_profile.get('providers', provider_patterns))} provider(s)."
     )
     client = get_mistral_client()
-    prompt_signals = compact_provider_signals(provider_patterns)
+    prompt_signals = {
+        "provider_discrepancy_patterns": compact_provider_signals(provider_patterns),
+        "coverage_profile": compact_coverage_profile(coverage_profile),
+    }
     chat_response = call_mistral_with_retries(
         "Mistral provider analysis request",
         lambda: client.chat.complete(
@@ -1119,6 +1164,7 @@ def generate_provider_analysis_report(store, output_path=None):
                         "}\n\n"
                         "If evidence is thin, say so and use low confidence. "
                         "Do not mention providers with no meaningful signals. "
+                        "Use the coverage profile to discuss recurring solo coverage and low-overlap beats. "
                         "Use concrete recurring information types and examples when available. "
                         "Avoid moral judgment; this is an evidence memo.\n\n"
                         f"{json.dumps(prompt_signals, ensure_ascii=False)}"

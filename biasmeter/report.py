@@ -2,8 +2,11 @@ import hashlib
 import html
 import json
 import re
+from collections import Counter
 from datetime import datetime
+from itertools import combinations
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 PATTERN_CATEGORIES = {
     "inclusions": "Unique inclusions",
@@ -162,6 +165,30 @@ def display_provider_name(provider):
     return PROVIDER_DISPLAY_NAMES.get(provider_key, str(provider or provider_key))
 
 
+def normalize_url(url):
+    if not url:
+        return ""
+
+    parsed_url = urlsplit(str(url).strip())
+    normalized_path = parsed_url.path.rstrip("/") or parsed_url.path
+    return urlunsplit(
+        (
+            parsed_url.scheme.lower(),
+            parsed_url.netloc.lower(),
+            normalized_path,
+            "",
+            "",
+        )
+    )
+
+
+def percentage(part, whole):
+    if not whole:
+        return 0.0
+
+    return round((part / whole) * 100, 1)
+
+
 def tooltip_for_sources(sources):
     source_lines = []
     for source in sources:
@@ -262,6 +289,147 @@ def infer_information_type(*parts):
             return label
 
     return "other recurring detail"
+
+
+def compact_counter(counter, limit=6):
+    return [
+        {"label": label, "count": count}
+        for label, count in counter.most_common(limit)
+        if count
+    ]
+
+
+def source_entries_for_report(report):
+    for entry in report.get("full_text", []):
+        yield from entry.get("sources", [])
+
+
+def build_coverage_profile(store, reports):
+    provider_data = {}
+    matched_urls_by_provider = {}
+    topic_provider_sets = []
+
+    def data_for_provider(provider):
+        provider = display_provider_name(provider)
+        if provider not in provider_data:
+            provider_data[provider] = {
+                "items": {},
+                "coverage_types": Counter(),
+                "matched_urls": set(),
+            }
+        return provider_data[provider]
+
+    for row in store.list_by_type("rss_item"):
+        item = row["content"]
+        provider = display_provider_name(item.get("provider", "unknown"))
+        normalized_url = normalize_url(item.get("link") or item.get("url"))
+        if not normalized_url:
+            continue
+
+        information_type = infer_information_type(
+            item.get("title", ""),
+            item.get("description", ""),
+            item.get("summary", ""),
+        )
+        provider_record = data_for_provider(provider)
+        provider_record["items"][normalized_url] = {
+            "title": item.get("title") or "Untitled article",
+            "url": item.get("link") or item.get("url") or "",
+            "information_type": information_type,
+            "published": item.get("published") or item.get("published_at") or "",
+        }
+        provider_record["coverage_types"][information_type] += 1
+
+    for report in reports:
+        report_providers = set()
+        for source in source_entries_for_report(report):
+            provider = display_provider_name(source.get("provider", "unknown"))
+            normalized_url = normalize_url(source.get("url"))
+            if not normalized_url:
+                continue
+
+            data_for_provider(provider)["matched_urls"].add(normalized_url)
+            matched_urls_by_provider.setdefault(provider, set()).add(normalized_url)
+            report_providers.add(provider)
+
+        if len(report_providers) > 1:
+            topic_provider_sets.append(report_providers)
+
+    provider_names = sorted(provider_data)
+    pair_counts = Counter()
+    for provider_set in topic_provider_sets:
+        for first_provider, second_provider in combinations(sorted(provider_set), 2):
+            pair_counts[f"{first_provider} + {second_provider}"] += 1
+
+    all_pairs = []
+    for first_provider, second_provider in combinations(provider_names, 2):
+        pair_label = f"{first_provider} + {second_provider}"
+        all_pairs.append(
+            {
+                "providers": [first_provider, second_provider],
+                "count": pair_counts.get(pair_label, 0),
+            }
+        )
+
+    provider_profiles = {}
+    for provider, provider_record in sorted(provider_data.items()):
+        items = provider_record["items"]
+        matched_urls = {url for url in provider_record["matched_urls"] if url in items}
+        solo_items = [
+            article
+            for url, article in sorted(
+                items.items(),
+                key=lambda item: item[1].get("published") or item[1].get("title", ""),
+                reverse=True,
+            )
+            if url not in matched_urls
+        ]
+        solo_type_counts = Counter(
+            article["information_type"] for article in solo_items
+        )
+        total_items = len(items)
+        matched_item_count = len(matched_urls)
+        solo_item_count = max(total_items - matched_item_count, 0)
+        provider_profiles[provider] = {
+            "total_items": total_items,
+            "matched_items": matched_item_count,
+            "solo_items": solo_item_count,
+            "matched_rate": percentage(matched_item_count, total_items),
+            "solo_rate": percentage(solo_item_count, total_items),
+            "coverage_types": compact_counter(provider_record["coverage_types"]),
+            "solo_coverage_types": compact_counter(solo_type_counts),
+            "solo_examples": solo_items[:5],
+        }
+
+    observed_pairs = [pair for pair in all_pairs if pair["count"]]
+    most_overlap = sorted(
+        observed_pairs,
+        key=lambda pair: pair["count"],
+        reverse=True,
+    )[:8]
+    least_overlap = sorted(
+        all_pairs,
+        key=lambda pair: (pair["count"], pair["providers"]),
+    )[:8]
+
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "rss_item_count": sum(
+            profile["total_items"] for profile in provider_profiles.values()
+        ),
+        "matched_topic_count": len(reports),
+        "multi_provider_topic_count": len(topic_provider_sets),
+        "provider_count": len(provider_profiles),
+        "providers": provider_profiles,
+        "most_overlap": most_overlap,
+        "least_overlap": least_overlap,
+    }
+
+
+def coverage_profile_signal(profile):
+    return {
+        key: value for key, value in (profile or {}).items() if key != "generated_at"
+    }
 
 
 def add_theme(pattern, category, theme):
@@ -525,6 +693,98 @@ def render_provider_patterns(patterns):
     """
 
 
+def format_count_chips(entries):
+    if not entries:
+        return '<span class="muted">No categories yet.</span>'
+
+    return " ".join(
+        f'<span class="pattern-chip">{html.escape(entry["label"])}: {entry["count"]}</span>'
+        for entry in entries
+    )
+
+
+def format_solo_example(article):
+    title = html.escape(article.get("title") or "Untitled article")
+    url = html.escape(article.get("url", ""), quote=True)
+    information_type = html.escape(article.get("information_type", "unknown"))
+    if url:
+        title_html = f'<a href="{url}">{title}</a>'
+    else:
+        title_html = title
+    return f'{title_html}<br><span class="muted">Type: {information_type}</span>'
+
+
+def render_overlap_pairs(pairs, empty_message):
+    if not pairs:
+        return f'<p class="muted">{html.escape(empty_message)}</p>'
+
+    items = []
+    for pair in pairs:
+        providers = " + ".join(pair.get("providers", []))
+        count = pair.get("count", 0)
+        items.append(
+            "<li>"
+            f"<strong>{html.escape(providers)}</strong>: "
+            f"{html.escape(str(count))} shared topic(s)"
+            "</li>"
+        )
+
+    return "<ul>" + "".join(items) + "</ul>"
+
+
+def render_coverage_profile(profile):
+    if not profile:
+        return """
+        <section class="topic coverage-profile">
+            <h2>Coverage Profile</h2>
+            <p class="muted">No RSS coverage profile is cached yet.</p>
+        </section>
+        """
+
+    provider_sections = []
+    for provider, provider_profile in profile.get("providers", {}).items():
+        solo_examples = provider_profile.get("solo_examples", [])
+        provider_sections.append(
+            f"""
+            <article class="provider-pattern">
+                <h3>{html.escape(provider)}</h3>
+                <div class="metric-grid">
+                    <div><strong>{provider_profile.get("total_items", 0)}</strong><span>RSS item(s)</span></div>
+                    <div><strong>{provider_profile.get("matched_items", 0)}</strong><span>multi-provider match(es)</span></div>
+                    <div><strong>{provider_profile.get("solo_items", 0)}</strong><span>solo or unmatched item(s)</span></div>
+                    <div><strong>{provider_profile.get("solo_rate", 0)}%</strong><span>solo coverage rate</span></div>
+                </div>
+                <h4>Coverage Mix</h4>
+                <div class="pattern-chips">{format_count_chips(provider_profile.get("coverage_types", []))}</div>
+                <h4>Solo / Unmatched Mix</h4>
+                <div class="pattern-chips">{format_count_chips(provider_profile.get("solo_coverage_types", []))}</div>
+                <details>
+                    <summary>Recent solo or unmatched examples</summary>
+                    {render_list_items(solo_examples, format_solo_example)}
+                </details>
+            </article>
+            """
+        )
+
+    return f"""
+    <section class="topic coverage-profile">
+        <h2>Coverage Profile</h2>
+        <p class="muted">Tracks RSS coverage before LLM comparison, so non-overlap becomes an explicit signal instead of disappearing from the discrepancy reports.</p>
+        <div class="metric-grid">
+            <div><strong>{profile.get("rss_item_count", 0)}</strong><span>RSS item(s)</span></div>
+            <div><strong>{profile.get("matched_topic_count", 0)}</strong><span>cached topic report(s)</span></div>
+            <div><strong>{profile.get("multi_provider_topic_count", 0)}</strong><span>multi-provider topic(s)</span></div>
+            <div><strong>{profile.get("provider_count", 0)}</strong><span>provider(s)</span></div>
+        </div>
+        <h3>Most Overlap</h3>
+        {render_overlap_pairs(profile.get("most_overlap", []), "No provider pairs overlap yet.")}
+        <h3>Least Overlap</h3>
+        {render_overlap_pairs(profile.get("least_overlap", []), "Not enough providers for overlap comparison.")}
+        {"".join(provider_sections)}
+    </section>
+    """
+
+
 def provider_breakdowns_path(output_path):
     output_path = Path(output_path)
     return output_path.with_name("provider-breakdowns.html")
@@ -778,6 +1038,28 @@ def render_page(title, subtitle, active_page, body_html, output_path, recent_pat
                 font-weight: 700;
                 padding: 3px 10px;
             }}
+            .metric-grid {{
+                display: grid;
+                gap: 10px;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                margin: 14px 0 18px;
+            }}
+            .metric-grid div {{
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid var(--border);
+                border-radius: 14px;
+                padding: 12px;
+            }}
+            .metric-grid strong {{
+                color: var(--accent);
+                display: block;
+                font-size: 1.35rem;
+            }}
+            .metric-grid span {{
+                color: var(--muted);
+                display: block;
+                font-size: 0.9rem;
+            }}
         </style>
     </head>
     <body>
@@ -874,7 +1156,9 @@ def render_provider_analysis(analysis_report):
     """
 
 
-def render_html_report(reports, output_path, provider_analysis=None):
+def render_html_report(
+    reports, output_path, provider_analysis=None, coverage_profile=None
+):
     output_path = Path(output_path)
     provider_path = provider_breakdowns_path(output_path)
     analysis_path = provider_analysis_path(output_path)
@@ -892,7 +1176,8 @@ def render_html_report(reports, output_path, provider_analysis=None):
         "Biasmeter Provider Breakdowns",
         "Long-term inclusion, omission, framing, and bias-signal patterns across cached coverage.",
         "providers",
-        render_provider_patterns(provider_patterns)
+        render_coverage_profile(coverage_profile)
+        + render_provider_patterns(provider_patterns)
         + render_topic_sections(reports, include_analysis=True),
         provider_path,
         output_path,
@@ -911,8 +1196,14 @@ def render_html_report(reports, output_path, provider_analysis=None):
 def render_cached_report(store, output_path):
     reports = [row["content"] for row in store.list_by_type("topic_report")]
     provider_patterns = build_provider_patterns(reports)
+    coverage_profile = build_coverage_profile(store, reports)
     provider_analysis = store.get("provider_analysis_report", "latest")
-    signal_hash = stable_json_hash(provider_patterns)
+    signal_hash = stable_json_hash(
+        {
+            "provider_patterns": provider_patterns,
+            "coverage_profile": coverage_profile_signal(coverage_profile),
+        }
+    )
     if provider_analysis and provider_analysis.get("signal_hash") != signal_hash:
         provider_analysis = None
 
@@ -920,7 +1211,13 @@ def render_cached_report(store, output_path):
         print("No cached topic reports found yet.")
         return None
 
-    output_path = render_html_report(reports, output_path, provider_analysis)
+    store.upsert("coverage_profile", "latest", coverage_profile)
+    output_path = render_html_report(
+        reports,
+        output_path,
+        provider_analysis,
+        coverage_profile,
+    )
     store.upsert(
         "html_report",
         str(output_path),
@@ -934,6 +1231,7 @@ def render_cached_report(store, output_path):
                 "provider_analysis": str(provider_analysis_path(output_path)),
             },
             "topic_count": len(reports),
+            "rss_item_count": coverage_profile.get("rss_item_count", 0),
             "topics": [report.get("title") for report in reports],
             "generated_at": datetime.now().isoformat(),
             "source": "cache",
@@ -947,6 +1245,7 @@ def render_cached_report(store, output_path):
             "topic_count": len(reports),
             "signal_hash": signal_hash,
             "providers": provider_patterns,
+            "coverage_profile": coverage_profile,
         },
     )
     print(f"Recent news written to {output_path}")
