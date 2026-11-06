@@ -1,0 +1,21 @@
+name: Git hygiene
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Check tracked files
+        run: python3 .github/scripts/check_git_hygiene.py
+      - name: Check new pull request commit messages
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/check_git_hygiene.py --range "$BASE_SHA..$HEAD_SHA"

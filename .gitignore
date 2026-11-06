@@ -12,3 +12,13 @@ build/
 *.egg-info/
 reports/
 data/
+
+# Local files and installed dependencies
+venv/
+node_modules/
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.nira/*.db
+.nira/*.db-*
